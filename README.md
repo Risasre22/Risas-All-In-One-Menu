@@ -14,7 +14,6 @@ Press **F1** to open the launcher. Press **F1** again or **Escape** to close it.
 - Improved Camera SE
 - ENB Editor
 - FLICK
-- Equipment Durability System NG
 
 Only installed integrations are shown.
 
