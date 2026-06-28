@@ -13,6 +13,22 @@ project(RisaAllInOneMenu VERSION 1.0.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Keep local source and build paths out of release binaries.
+if(MSVC)
+    file(TO_NATIVE_PATH "${CMAKE_SOURCE_DIR}" RISA_SOURCE_DIR_NATIVE)
+    file(TO_NATIVE_PATH "${CMAKE_BINARY_DIR}" RISA_BINARY_DIR_NATIVE)
+    string(TOUPPER "${RISA_SOURCE_DIR_NATIVE}" RISA_SOURCE_DIR_NATIVE_UPPER)
+    string(TOUPPER "${RISA_BINARY_DIR_NATIVE}" RISA_BINARY_DIR_NATIVE_UPPER)
+
+    add_compile_options(
+        "/experimental:deterministic"
+        "/pathmap:${RISA_BINARY_DIR_NATIVE}=."
+        "/pathmap:${RISA_BINARY_DIR_NATIVE_UPPER}=."
+        "/pathmap:${RISA_SOURCE_DIR_NATIVE}=."
+        "/pathmap:${RISA_SOURCE_DIR_NATIVE_UPPER}=."
+    )
+endif()
+
 set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(SKSE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 
