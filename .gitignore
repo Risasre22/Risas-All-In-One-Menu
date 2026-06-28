@@ -1,0 +1,23 @@
+# Build products
+SKSE_Plugin/build/
+SKSE_Plugin/vcpkg/
+SKSE_Plugin/.vs/
+*.obj
+*.lib
+*.exp
+*.pdb
+
+# Runtime/release artifacts
+SKSE/Plugins/*.dll
+SKSE/Plugins/*.ini
+*.7z
+
+# Local editor and agent state
+.agents/
+.codex/
+.vscode/
+*.code-workspace
+
+# OS files
+Thumbs.db
+.DS_Store
