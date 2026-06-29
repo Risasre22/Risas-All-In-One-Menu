@@ -43,10 +43,17 @@
 #include <vector>
 #include <sstream>
 #include <set>
+#include <nlohmann/json.hpp>
 #include <map>
 #include <mutex>
 #include <cstring>
 #include <initializer_list>
+
+static constexpr std::string_view kRisaMenuVersion = "1.2.1";
+static std::string g_RuntimeVersion = "Unknown";
+static std::string g_SKSEVersion = "Unknown";
+static std::string g_RuntimeEdition = "Unknown";
+static std::atomic<int> g_MFIniWriteResult{ -2 };
 
 // ============================================================================
 // [DIAG] TEMPORARY channel-identification logging. Remove once the input channel
@@ -146,6 +153,7 @@ static constexpr KeyEntry kKeyTable[] = {
     // F13-F15: valid scan/VK codes with no physical key on a standard keyboard — used as
     // "unpressable" launcher-only hotkeys for the ImGui mods (OAR/dMenu/IC).
     { "F13", 0x64, VK_F13 }, { "F14", 0x65, VK_F14 }, { "F15", 0x66, VK_F15 },
+    { "F16", 0x67, VK_F16 }, { "F17", 0x68, VK_F17 }, { "F18", 0x69, VK_F18 }, { "F19", 0x6A, VK_F19 },
     { "INSERT",    0xD2, VK_INSERT   }, { "DELETE",    0xD3, VK_DELETE   },
     { "HOME",      0xC7, VK_HOME     }, { "END",       0xCF, VK_END      },
     { "PAGEUP",    0xC9, VK_PRIOR    }, { "PAGEDOWN",  0xD1, VK_NEXT     },
@@ -234,6 +242,20 @@ struct FLICKConfig {
 };
 static FLICKConfig g_FLICKConfig;
 
+struct KreatEConfig {
+    bool enabled = false;
+    WORD toggleDIK = 0xCF;
+    WORD toggleVK = VK_END;
+};
+static KreatEConfig g_KreatEConfig;
+
+struct CSConfig {
+    bool enabled = false;
+    WORD toggleDIK = 0xCF; // Community Shaders menu default = End
+    WORD toggleVK = VK_END;
+};
+static CSConfig g_CSConfig;
+
 // Minimal prefix of FLICK's official packed C API (FUCK_API.h). Keeping only the
 // fields through SetMenuOpen/IsMenuOpen avoids depending on FLICK's ImGui types.
 #pragma pack(push, 1)
@@ -254,7 +276,9 @@ enum class ActiveMenu {
     DebugMenu,
     DMenu,
     ImprovedCamera,
-    FLICK
+    FLICK,
+    KreatE,
+    CS
 };
 static std::atomic<ActiveMenu> g_ActiveMenu{ ActiveMenu::None };
 
@@ -719,6 +743,64 @@ static void LoadFLICKConfig() {
         g_FLICKConfig.enabled, g_FLICKConfig.toggleDIK, g_FLICKConfig.toggleVK);
 }
 
+static void LoadKreatEConfig() {
+    g_KreatEConfig.enabled = IsPluginPresent("KreatE");
+    if (!g_KreatEConfig.enabled) return;
+
+    const std::filesystem::path ini = "Data/KreatE/UserSettings.ini";
+    if (std::filesystem::exists(ini)) {
+        std::ifstream in(ini);
+        std::string line;
+        while (std::getline(in, line)) {
+            const auto sc = line.find(';');
+            if (sc != std::string::npos) line = line.substr(0, sc);
+            const auto eq = line.find('=');
+            if (eq == std::string::npos) continue;
+            if (ToUpper(TrimStr(line.substr(0, eq))) != "GUITOGGLEKEYS") continue;
+            try {
+                const auto value = std::stoul(TrimStr(line.substr(eq + 1)), nullptr, 0);
+                if (value > 0 && value < 256) g_KreatEConfig.toggleVK = static_cast<WORD>(value);
+            } catch (...) {
+                SKSE::log::warn("LoadKreatEConfig: failed to parse GUIToggleKeys.");
+            }
+        }
+    } else {
+        SKSE::log::info("LoadKreatEConfig: UserSettings.ini has not been generated yet; using End for this launch.");
+    }
+
+    g_KreatEConfig.toggleDIK = g_KreatEConfig.toggleVK == VK_END
+        ? 0xCF : DIKFromVK(g_KreatEConfig.toggleVK);
+    SKSE::log::info("LoadKreatEConfig: enabled=true, toggleDIK={:#x}, toggleVK={:#x}",
+        g_KreatEConfig.toggleDIK, g_KreatEConfig.toggleVK);
+}
+
+static void LoadCSConfig() {
+    g_CSConfig.enabled = IsPluginPresent("CommunityShaders");
+    if (!g_CSConfig.enabled) return;
+
+    std::filesystem::path jsonPath = "Data/SKSE/Plugins/CommunityShaders/SettingsUser.json";
+    if (!std::filesystem::exists(jsonPath)) {
+        jsonPath = "Data/SKSE/Plugins/CommunityShaders/SettingsDefault.json";
+    }
+
+    g_CSConfig.toggleVK = VK_END; // default
+    if (std::filesystem::exists(jsonPath)) {
+        try {
+            std::ifstream f(jsonPath);
+            nlohmann::json j = nlohmann::json::parse(f);
+            if (j.contains("Menu") && j["Menu"].contains("ToggleKey")) {
+                g_CSConfig.toggleVK = j["Menu"]["ToggleKey"].get<WORD>();
+            }
+        } catch (...) {
+            SKSE::log::warn("LoadCSConfig: failed to parse {}", jsonPath.string());
+        }
+    }
+
+    g_CSConfig.toggleDIK = g_CSConfig.toggleVK == VK_END ? 0xCF : DIKFromVK(g_CSConfig.toggleVK);
+    SKSE::log::info("LoadCSConfig: enabled=true, toggleDIK={:#x}, toggleVK={:#x}",
+        g_CSConfig.toggleDIK, g_CSConfig.toggleVK);
+}
+
 static bool IsImprovedCameraModifierDown() {
     if (!g_ImprovedCameraConfig.enabled || g_ImprovedCameraConfig.modifierVK == 0) return true;
     const auto keyState = [](int vk) {
@@ -729,6 +811,7 @@ static bool IsImprovedCameraModifierDown() {
 
 static std::atomic<float> g_WindowPosX{ -1.0f };
 static std::atomic<float> g_WindowPosY{ -1.0f };
+static std::atomic<float> g_SettingsWindowHeight{ 754.0f }; // user-resized Settings tab height (persisted)
 static std::atomic<float> g_LauncherFontScale{ 0.9f };
 static std::atomic<WORD> g_LauncherHotkeyDIK{ 0x3B };  // Default F1 (0x3B)
 static std::atomic<WORD> g_LauncherHotkeyVK{ 0x70 };   // Default VK_F1 (0x70)
@@ -736,21 +819,29 @@ static std::atomic<bool> g_LauncherHotkeyCtrl{ false };
 static std::atomic<bool> g_LauncherHotkeyShift{ false };
 static std::atomic<bool> g_LauncherHotkeyAlt{ false };
 static std::atomic<bool> g_LauncherHotkeyDoubleTap{ false };
+// When on: opening still needs the full hotkey (modifier and/or double-tap), but a single
+// bare press of the key alone closes whatever is open.
+static std::atomic<bool> g_LauncherHotkeyEasyClose{ false };
 static std::atomic<long long> g_LastLauncherKeyPressMs{ 0 };
 
 static std::atomic<bool> g_UnblockOAR{ false };
 static std::atomic<bool> g_UnblockIED{ false };
 static std::atomic<bool> g_UnblockENB{ false };
 static std::atomic<bool> g_UnblockDebugMenu{ false };
+static std::atomic<bool> g_UnblockCS{ false };
 static std::atomic<bool> g_UnblockDMenu{ false };
 static std::atomic<bool> g_UnblockImprovedCamera{ false };
 static std::atomic<bool> g_UnblockFLICK{ false };
+static std::atomic<bool> g_UnblockKreatE{ false };
+// Retained only long enough to restore Blocking for users migrating from the
+// removed "Keep KreatE Open With Launcher" option.
+static std::atomic<int> g_LegacyKreatEOriginalBlocking{ -1 };
 static std::atomic<long long> g_LastOriginalHotkeyMs{ 0 };
 
 static std::atomic<bool> g_WaitingForHotkeyPress{ false };
 
 static std::vector<std::string> g_ButtonOrder = {
-    "MF", "OAR", "IED", "DebugMenu", "dMenu", "ImprovedCamera", "ENB", "FLICK"
+    "MF", "OAR", "IED", "DebugMenu", "dMenu", "ImprovedCamera", "ENB", "FLICK", "KreatE", "CS"
 };
 
 static void SaveButtonOrder() {
@@ -769,11 +860,13 @@ static void SaveButtonOrder() {
         outfile << "FontScale = " << g_LauncherFontScale.load() << "\n";
         outfile << "WindowPosX = " << g_WindowPosX.load() << "\n";
         outfile << "WindowPosY = " << g_WindowPosY.load() << "\n";
+        outfile << "SettingsHeight = " << g_SettingsWindowHeight.load() << "\n";
         outfile << "HotkeyDIK = " << g_LauncherHotkeyDIK.load() << "\n";
         outfile << "HotkeyCtrl = " << (g_LauncherHotkeyCtrl.load() ? 1 : 0) << "\n";
         outfile << "HotkeyShift = " << (g_LauncherHotkeyShift.load() ? 1 : 0) << "\n";
         outfile << "HotkeyAlt = " << (g_LauncherHotkeyAlt.load() ? 1 : 0) << "\n";
         outfile << "HotkeyDoubleTap = " << (g_LauncherHotkeyDoubleTap.load() ? 1 : 0) << "\n";
+        outfile << "HotkeyEasyClose = " << (g_LauncherHotkeyEasyClose.load() ? 1 : 0) << "\n";
         outfile << "EnableOriginalOAR = " << (g_UnblockOAR.load() ? 1 : 0) << "\n";
         outfile << "EnableOriginalIED = " << (g_UnblockIED.load() ? 1 : 0) << "\n";
         outfile << "EnableOriginalENB = " << (g_UnblockENB.load() ? 1 : 0) << "\n";
@@ -781,6 +874,8 @@ static void SaveButtonOrder() {
         outfile << "EnableOriginalDMenu = " << (g_UnblockDMenu.load() ? 1 : 0) << "\n";
         outfile << "EnableOriginalImprovedCamera = " << (g_UnblockImprovedCamera.load() ? 1 : 0) << "\n";
         outfile << "EnableOriginalFLICK = " << (g_UnblockFLICK.load() ? 1 : 0) << "\n";
+        outfile << "EnableOriginalKreatE = " << (g_UnblockKreatE.load() ? 1 : 0) << "\n";
+        outfile << "EnableOriginalCS = " << (g_UnblockCS.load() ? 1 : 0) << "\n";
         outfile.close();
         SKSE::log::info("SaveButtonOrder: Successfully saved button order and settings.");
     } else {
@@ -823,6 +918,8 @@ static void LoadButtonOrder() {
                     try { g_WindowPosX.store(std::stof(val)); } catch (...) {}
                 } else if (key == "WINDOWPOSY") {
                     try { g_WindowPosY.store(std::stof(val)); } catch (...) {}
+                } else if (key == "SETTINGSHEIGHT") {
+                    try { g_SettingsWindowHeight.store(std::stof(val)); } catch (...) {}
                 } else if (key == "HOTKEYDIK") {
                     try {
                         WORD dik = (WORD)std::stoi(val);
@@ -837,6 +934,8 @@ static void LoadButtonOrder() {
                     try { g_LauncherHotkeyAlt.store(std::stoi(val) != 0); } catch (...) {}
                 } else if (key == "HOTKEYDOUBLETAP") {
                     try { g_LauncherHotkeyDoubleTap.store(std::stoi(val) != 0); } catch (...) {}
+                } else if (key == "HOTKEYEASYCLOSE") {
+                    try { g_LauncherHotkeyEasyClose.store(std::stoi(val) != 0); } catch (...) {}
                 } else if (key == "ENABLEORIGINALOAR" || key == "UNBLOCKOAR") {
                     try { g_UnblockOAR.store(std::stoi(val) != 0); } catch (...) {}
                 } else if (key == "ENABLEORIGINALIED" || key == "UNBLOCKIED") {
@@ -851,6 +950,12 @@ static void LoadButtonOrder() {
                     try { g_UnblockImprovedCamera.store(std::stoi(val) != 0); } catch (...) {}
                 } else if (key == "ENABLEORIGINALFLICK" || key == "UNBLOCKFLICK") {
                     try { g_UnblockFLICK.store(std::stoi(val) != 0); } catch (...) {}
+                } else if (key == "ENABLEORIGINALKREATE" || key == "UNBLOCKKREATE") {
+                    try { g_UnblockKreatE.store(std::stoi(val) != 0); } catch (...) {}
+                } else if (key == "ENABLEORIGINALCS") {
+                    try { g_UnblockCS.store(std::stoi(val) != 0); } catch (...) {}
+                } else if (key == "KREATEORIGINALBLOCKING") {
+                    try { g_LegacyKreatEOriginalBlocking.store(std::stoi(val)); } catch (...) {}
                 }
             }
             infile.close();
@@ -858,7 +963,7 @@ static void LoadButtonOrder() {
     }
 
     std::vector<std::string> defaultOrder = {
-        "MF", "OAR", "IED", "DebugMenu", "dMenu", "ImprovedCamera", "ENB", "FLICK"
+        "MF", "OAR", "IED", "DebugMenu", "dMenu", "ImprovedCamera", "ENB", "FLICK", "KreatE", "CS"
     };
 
     std::vector<std::string> newOrder;
@@ -900,6 +1005,8 @@ static std::atomic<long long> g_ENBOpenRequestedMs{ 0 };
 static std::atomic<bool> g_AllowDebugMenuOpen{ false };
 static std::atomic<long long> g_AllowDebugMenuOpenUntilMs{ 0 };
 static std::atomic<int> g_DebugMenuPassCount{ 0 };
+static std::atomic<bool> g_AllowCSOpen{ false };
+static std::atomic<long long> g_AllowCSOpenUntilMs{ 0 };
 static std::atomic<bool> g_AllowESCSinkBlock{ false };
 
 // After a mod is opened from a launcher button it can take up to ~1s to actually appear.
@@ -915,6 +1022,11 @@ static std::atomic<long long> g_AllowImprovedCameraOpenUntilMs{ 0 };
 
 static std::atomic<bool> g_AllowFLICKOpen{ false };
 static std::atomic<long long> g_AllowFLICKOpenUntilMs{ 0 };
+
+static std::atomic<bool> g_AllowKreatEOpen{ false };
+static std::atomic<long long> g_AllowKreatEOpenUntilMs{ 0 };
+static std::atomic<bool> g_KreatEIniManaged{ false };
+static std::atomic<long long> g_LastKreatEIniAttemptMs{ 0 };
 
 static constexpr WORD kEscapeDIK   = 0x01;  // ESC scan code
 
@@ -938,6 +1050,12 @@ static void OpenDebugMenu();
 static void OpenDMenu();
 static void OpenImprovedCamera();
 static void OpenFLICK();
+static void OpenKreatE();
+static void OpenCommunityShaders();
+static void TryManageKreatEHotkey(bool lateRetry = false);
+static void TryManageCSHotkey(bool lateRetry = false);
+static void RestoreLegacyKreatEBlocking();
+static void RestoreAllModDefaults();
 
 // ----------------------------------------------------------------------------
 // Game-window state used to keep Win32 filtering scoped to Skyrim.
@@ -1081,6 +1199,22 @@ static void CloseActiveModMenu(ActiveMenu active) {
             flick->SetMenuOpen(false);
             SKSE::log::info("CloseActiveModMenu: Closed FLICK through its API.");
         }
+    } else if (active == ActiveMenu::KreatE) {
+        g_AllowKreatEOpen.store(true);
+        g_AllowKreatEOpenUntilMs.store(NowMs() + 1000);
+        SimulateModifiedKey(0, g_KreatEConfig.toggleDIK);
+        std::thread([]() {
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+            g_AllowKreatEOpen.store(false);
+            g_AllowKreatEOpenUntilMs.store(0);
+        }).detach();
+        SKSE::log::info("CloseActiveModMenu: toggled KreatE closed with {}.", NameFromDIK(g_KreatEConfig.toggleDIK));
+    } else if (active == ActiveMenu::CS) {
+        // Community Shaders toggles on its key — re-emit it through the engine to close.
+        g_AllowCSOpen.store(true);
+        g_AllowCSOpenUntilMs.store(NowMs() + 1000);
+        InjectEngineKey(g_CSConfig.toggleDIK);
+        SKSE::log::info("CloseActiveModMenu: closing Community Shaders via engine key event.");
     } else if (active == ActiveMenu::MF) {
         ForceCloseSKSEMenuFramework();
         SKSE::log::info("CloseActiveModMenu: Closed SKSE Menu Framework.");
@@ -1102,14 +1236,27 @@ static bool AreLauncherModifiersOk() {
     return true;
 }
 
+// Double-tap detection. Returns true only on the SECOND tap that lands within the window.
+// Window upper bound is generous (300 ms) so the natural 140-250 ms double-tap always counts;
+// the small lower bound (40 ms) ignores the same physical press arriving twice from two input
+// paths in the same frame, which would otherwise false-trigger on a single tap.
+static constexpr long long kDoubleTapMinMs = 40;
+static constexpr long long kDoubleTapMaxMs = 300;
 static bool CheckLauncherDoubleTap(long long now) {
     if (!g_LauncherHotkeyDoubleTap.load()) return true;
-    long long last = g_LastLauncherKeyPressMs.load();
-    g_LastLauncherKeyPressMs.store(now);
-    if (now - last <= 300) {
-        g_LastLauncherKeyPressMs.store(0); // reset
+    const long long last = g_LastLauncherKeyPressMs.load();
+    const long long gap = now - last;
+
+    if (last != 0 && gap < kDoubleTapMinMs) {
+        return false; // duplicate of the same press — ignore, keep waiting for a real 2nd tap
+    }
+    if (last != 0 && gap <= kDoubleTapMaxMs) {
+        g_LastLauncherKeyPressMs.store(0);
+        SKSE::log::info("Launcher double-tap: detected (gap={} ms).", gap);
         return true;
     }
+    g_LastLauncherKeyPressMs.store(now);
+    SKSE::log::info("Launcher double-tap: first tap registered — waiting for the second.");
     return false;
 }
 
@@ -1117,16 +1264,30 @@ static bool CheckLauncherDoubleTap(long long now) {
 // low-level keyboard hook on a physical launcher-hotkey press, and as a fallback from
 // the DI8 GetDeviceState path when the LL hook isn't active.
 static void ToggleLauncher() {
-    if (IsUserTyping()) return;
+    SKSE::log::info("ToggleLauncher: launcher hotkey pressed.");
+    if (IsUserTyping()) {
+        SKSE::log::info("ToggleLauncher: hotkey pressed but nothing launched (user is typing).");
+        return;
+    }
     if (IsENBOpeningTransition()) {
+        SKSE::log::info("ToggleLauncher: hotkey pressed but nothing launched (ENB opening transition).");
         return;
     }
     if (NowMs() < g_MenuOpenLockUntilMs.load()) {
-        SKSE::log::info("ToggleLauncher: ignored because g_MenuOpenLockUntilMs is active.");
+        SKSE::log::info("ToggleLauncher: hotkey pressed but nothing launched (menu-open lock active).");
         return;
     }
     long long now = NowMs();
-    if (now - g_LastLauncherToggleMs.load() <= 700) return;
+    const long long lastToggle = g_LastLauncherToggleMs.load();
+    if (now - lastToggle <= 200) {
+        SKSE::log::info("ToggleLauncher: ignored duplicate trigger within 200ms.");
+        return;
+    }
+    if (!g_LauncherHotkeyDoubleTap.load() && !g_LauncherHotkeyEasyClose.load() &&
+        now - lastToggle <= 700) {
+        SKSE::log::info("ToggleLauncher: hotkey pressed but nothing launched (debounced).");
+        return;
+    }
     g_LastLauncherToggleMs.store(now);
 
     auto active = g_ActiveMenu.load();
@@ -1141,6 +1302,8 @@ static void ToggleLauncher() {
         g_LauncherWindow->IsOpen.store(true);
         g_LauncherWindow->BlockUserInput.store(true);
         SKSE::log::info("ToggleLauncher: Launcher opened.");
+    } else {
+        SKSE::log::info("ToggleLauncher: hotkey pressed but nothing launched (no launcher window).");
     }
 }
 
@@ -1203,8 +1366,10 @@ static LRESULT CALLBACK HookedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
                     bool isRepeat = (lParam & 0x40000000) != 0;
                     if (!isRepeat) {
                         long long now = NowMs();
-                        if (now - g_LastLauncherToggleMs.load() > 700) {
-                            if (CheckLauncherDoubleTap(now)) {
+                        const bool dtap = g_LauncherHotkeyDoubleTap.load();
+                        const bool act = dtap ? CheckLauncherDoubleTap(now)
+                                              : (now - g_LastLauncherToggleMs.load() > 700);
+                        if (act) {
                                 g_LastLauncherToggleMs.store(now);
                                 triggered = true;
                                 auto active = g_ActiveMenu.load();
@@ -1225,7 +1390,6 @@ static LRESULT CALLBACK HookedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
                             }
                         }
                     }
-                }
 
                 if (g_LauncherHotkeyDoubleTap.load()) {
                     if (triggered) return 0;
@@ -1297,6 +1461,16 @@ static LRESULT CALLBACK HookedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
                 } else {
                     SKSE::log::info("WndProc: BLOCKED FLICK key 0x{:02X} (msg=0x{:04X})", wParam, uMsg);
                     return 0; // block
+                }
+            }
+        }
+
+        if (g_KreatEConfig.enabled && wParam == static_cast<WPARAM>(g_KreatEConfig.toggleVK) && !g_UnblockKreatE.load()) {
+            if (uMsg == WM_KEYDOWN || uMsg == WM_KEYUP || uMsg == WM_SYSKEYDOWN || uMsg == WM_SYSKEYUP) {
+                const bool allowed = g_AllowKreatEOpen.load() && NowMs() <= g_AllowKreatEOpenUntilMs.load();
+                if (!allowed) {
+                    SKSE::log::info("WndProc: BLOCKED KreatE key 0x{:02X} (msg=0x{:04X})", wParam, uMsg);
+                    return 0;
                 }
             }
         }
@@ -1431,6 +1605,7 @@ static void SuppressManagedPollKeys() {
     zap(g_DMenuConfig.enabled,          g_DMenuConfig.toggleDIK,          g_UnblockDMenu.load(),          g_AllowDMenuOpen.load(),          g_AllowDMenuOpenUntilMs.load());
     zap(g_FLICKConfig.enabled,          g_FLICKConfig.toggleDIK,          g_UnblockFLICK.load(),          g_AllowFLICKOpen.load(),          g_AllowFLICKOpenUntilMs.load());
     zap(g_ImprovedCameraConfig.enabled, g_ImprovedCameraConfig.toggleDIK, g_UnblockImprovedCamera.load(), g_AllowImprovedCameraOpen.load(), g_AllowImprovedCameraOpenUntilMs.load());
+    zap(g_KreatEConfig.enabled,         g_KreatEConfig.toggleDIK,         g_UnblockKreatE.load(),         g_AllowKreatEOpen.load(),         g_AllowKreatEOpenUntilMs.load());
 }
 
 // Hook BSWin32KeyboardDevice::Process (vtable slot 2). The engine reads the buffered
@@ -1454,6 +1629,8 @@ static bool DMenuOriginalMoved();
 static bool ImprovedCameraOriginalMoved();
 static bool FLICKOriginalMoved();
 static bool DebugMenuOriginalMoved();
+static bool KreatEOriginalMoved();
+static bool CSOriginalMoved();
 
 // Emit a single key press through the engine (used for both opening and closing toggle-style
 // mods from the launcher). SendInput can't reach the engine's buffered input, so this is the
@@ -1509,11 +1686,14 @@ static void HookedKbProcess(RE::BSWin32KeyboardDevice* self, float a_dt) {
     clear(g_DebugMenuConfig.enabled && g_UnblockDebugMenu.load() && DebugMenuOriginalMoved() &&
             g_LauncherHotkeyDIK.load() != 0x3B && plain,
         0x3B, false, false, 0);
+    clear(g_KreatEConfig.enabled && g_UnblockKreatE.load() && KreatEOriginalMoved() && plain,
+        0xCF, false, false, 0);
 
     clear(g_OARConfig.enabled,            g_OARConfig.toggleDIK,            g_UnblockOAR.load(),            g_AllowOAROpen.load(),            g_AllowOAROpenUntilMs.load());
     clear(g_DMenuConfig.enabled,          g_DMenuConfig.toggleDIK,          g_UnblockDMenu.load(),          g_AllowDMenuOpen.load(),          g_AllowDMenuOpenUntilMs.load());
     clear(g_FLICKConfig.enabled,          g_FLICKConfig.toggleDIK,          g_UnblockFLICK.load(),          g_AllowFLICKOpen.load(),          g_AllowFLICKOpenUntilMs.load());
     clear(g_ImprovedCameraConfig.enabled, g_ImprovedCameraConfig.toggleDIK, g_UnblockImprovedCamera.load(), g_AllowImprovedCameraOpen.load(), g_AllowImprovedCameraOpenUntilMs.load());
+    clear(g_KreatEConfig.enabled,         g_KreatEConfig.toggleDIK,         g_UnblockKreatE.load(),         g_AllowKreatEOpen.load(),         g_AllowKreatEOpenUntilMs.load());
 }
 
 static void TryHookKeyboardProcess() {
@@ -1548,6 +1728,8 @@ static bool ImprovedCameraOriginalMoved() {
 }
 static bool FLICKOriginalMoved() { return g_FLICKConfig.toggleDIK != 0x41; }
 static bool DebugMenuOriginalMoved() { return g_DebugMenuConfig.toggleDIK != 0x3B; }
+static bool KreatEOriginalMoved() { return g_KreatEConfig.toggleVK != VK_END; }
+static bool CSOriginalMoved() { return g_CSConfig.toggleVK != VK_END; }
 
 static void PollOriginalHotkeyAliases(const BYTE* state) {
     if (!state || g_WaitingForHotkeyPress.load() || IsUserTyping()) return;
@@ -1563,6 +1745,8 @@ static void PollOriginalHotkeyAliases(const BYTE* state) {
     // Defer only the opening action until the original chord has been fully released.
     static bool oarOpenPending = false;
     static long long oarOpenPendingSince = 0;
+    static bool kreateTogglePending = false;
+    static long long kreateTogglePendingSince = 0;
     if (oarOpenPending) {
         const long long now = NowMs();
         if (now - oarOpenPendingSince > 2000) {
@@ -1581,7 +1765,28 @@ static void PollOriginalHotkeyAliases(const BYTE* state) {
         }
     }
 
-    const std::array<bool, 7> chordDown = {
+    if (kreateTogglePending) {
+        const long long now = NowMs();
+        if (now - kreateTogglePendingSince > 2000) {
+            kreateTogglePending = false;
+            SKSE::log::warn("DirectInput: timed out waiting for End release for KreatE.");
+        } else if (!down(0xCF)) {
+            kreateTogglePending = false;
+            const auto active = g_ActiveMenu.load();
+            if (active == ActiveMenu::KreatE) {
+                SKSE::log::info("DirectInput: End released; closing KreatE.");
+                CloseActiveModMenu(active);
+            } else if (active == ActiveMenu::None &&
+                !(g_LauncherWindow && g_LauncherWindow->IsOpen.load()) &&
+                !IsExternalMenuOpen() && !IsENBOpeningTransition() &&
+                now >= g_MenuOpenLockUntilMs.load()) {
+                SKSE::log::info("DirectInput: End released; opening KreatE.");
+                OpenKreatE();
+            }
+        }
+    }
+
+    const std::array<bool, 9> chordDown = {
         g_UnblockOAR.load() && g_OARConfig.enabled && OAROriginalMoved() && down(0x18) && shift && !ctrl && !alt,
         g_UnblockIED.load() && g_IEDConfig.enabled && IEDOriginalMoved() && down(0x0E) && plain,
         g_UnblockENB.load() && g_ENBConfig.enabled && ENBOriginalMoved() && down(0x1C) && shift && !ctrl && !alt,
@@ -1589,24 +1794,26 @@ static void PollOriginalHotkeyAliases(const BYTE* state) {
         g_UnblockImprovedCamera.load() && g_ImprovedCameraConfig.enabled && ImprovedCameraOriginalMoved() && down(0xC7) && shift && !ctrl && !alt,
         g_UnblockFLICK.load() && g_FLICKConfig.enabled && FLICKOriginalMoved() && down(0x41) && plain,
         g_UnblockDebugMenu.load() && g_DebugMenuConfig.enabled && DebugMenuOriginalMoved() &&
-            g_LauncherHotkeyDIK.load() != 0x3B && down(0x3B) && plain
+            g_LauncherHotkeyDIK.load() != 0x3B && down(0x3B) && plain,
+        g_UnblockKreatE.load() && g_KreatEConfig.enabled && KreatEOriginalMoved() && down(0xCF) && plain,
+        g_UnblockCS.load() && g_CSConfig.enabled && CSOriginalMoved() && down(0xCF) && plain
     };
-    const std::array<bool, 7> primaryDown = {
-        down(0x18), down(0x0E), down(0x1C), down(0xC7), down(0xC7), down(0x41), down(0x3B)
+    const std::array<bool, 9> primaryDown = {
+        down(0x18), down(0x0E), down(0x1C), down(0xC7), down(0xC7), down(0x41), down(0x3B), down(0xCF), down(0xCF)
     };
 
-    static std::array<bool, 7> wasPrimaryDown{};
-    const std::array<ActiveMenu, 7> targets = {
+    static std::array<bool, 9> wasPrimaryDown{};
+    const std::array<ActiveMenu, 9> targets = {
         ActiveMenu::OAR, ActiveMenu::IED, ActiveMenu::ENB, ActiveMenu::DMenu,
-        ActiveMenu::ImprovedCamera, ActiveMenu::FLICK, ActiveMenu::DebugMenu
+        ActiveMenu::ImprovedCamera, ActiveMenu::FLICK, ActiveMenu::DebugMenu, ActiveMenu::KreatE, ActiveMenu::CS
     };
-    const std::array<const char*, 7> names = {
+    const std::array<const char*, 9> names = {
         "Open Animation Replacer", "IED", "ENB Editor", "dMenu",
-        "Improved Camera", "FLICK", "Debug Menu"
+        "Improved Camera", "FLICK", "Debug Menu", "KreatE", "Community Shaders"
     };
-    const std::array<void(*)(), 7> openActions = {
+    const std::array<void(*)(), 9> openActions = {
         OpenAnimationReplacer, OpenImmersiveEquipmentDisplays, OpenENB, OpenDMenu,
-        OpenImprovedCamera, OpenFLICK, OpenDebugMenu
+        OpenImprovedCamera, OpenFLICK, OpenDebugMenu, OpenKreatE, OpenCommunityShaders
     };
 
     for (std::size_t i = 0; i < chordDown.size(); ++i) {
@@ -1617,6 +1824,13 @@ static void PollOriginalHotkeyAliases(const BYTE* state) {
         const long long now = NowMs();
         const long long last = g_LastOriginalHotkeyMs.exchange(now);
         if (now - last <= 500) continue;
+
+        if (i == 7) {
+            kreateTogglePending = true;
+            kreateTogglePendingSince = now;
+            SKSE::log::info("DirectInput: original KreatE alias waiting for End release.");
+            continue;
+        }
 
         const auto active = g_ActiveMenu.load();
         if (active == targets[i]) {
@@ -1668,6 +1882,8 @@ static HRESULT STDMETHODCALLTYPE HookedGetDeviceState(IDirectInputDevice8A* pDev
             lastSinkScanMs.compare_exchange_strong(lastScan, now, std::memory_order_relaxed)) {
             TryHookModSinks();
             TryHookKeyboardProcess();
+            TryManageKreatEHotkey(true);
+            TryManageCSHotkey(true);
         }
 
         if (g_AllowESCSinkBlock.load()) {
@@ -1679,23 +1895,47 @@ static HRESULT STDMETHODCALLTYPE HookedGetDeviceState(IDirectInputDevice8A* pDev
         // Launcher-hotkey detection at the DirectInput level (this is the path that
         // actually sees in-game key presses). Edge-detected + debounced in ToggleLauncher.
         {
-            // If DebugMenu (which may share this key) is mid-open via simulated input,
-            // don't treat that injected press as a launcher toggle.
+            // GetDeviceState is polled by several callers each frame (engine, Steam overlay, ...),
+            // each with its own buffer. If one reports the key released while another reports it
+            // held, a naive edge test flip-flops and fires phantom edges (a tap could open then
+            // instantly close). So we LATCH "pressed" for a short window (> one frame) across all
+            // callers and fire exactly one edge per real press, re-arming only once the key has
+            // truly been released. Works on whichever poll actually has the key (needed for Easy
+            // Close while a menu is open).
             bool debugMenuOpening = g_AllowDebugMenuOpen.load() && NowMs() <= g_AllowDebugMenuOpenUntilMs.load();
-            static bool lastF1State = false;
-            bool f1Pressed = !g_WaitingForHotkeyPress.load() && (state[g_LauncherHotkeyDIK.load()] & 0x80) != 0;
-            bool f1JustPressed = f1Pressed && !lastF1State;
-            lastF1State = f1Pressed;
+            long long now = NowMs();
+            const bool rawPressed = !g_WaitingForHotkeyPress.load() && (state[g_LauncherHotkeyDIK.load()] & 0x80) != 0;
+
+            static long long s_lastPressedSeenMs = 0;
+            static bool s_armed = true;
+            if (rawPressed) s_lastPressedSeenMs = now;
+            const bool pressedLatched = (now - s_lastPressedSeenMs) <= 40; // bridge multi-caller gaps (> 1 frame)
+
+            bool f1JustPressed = false;
+            if (pressedLatched) {
+                if (s_armed) { f1JustPressed = true; s_armed = false; }
+            } else {
+                s_armed = true; // key truly released — ready for the next press
+            }
+
             // Ignore the launcher key while a just-opened mod is still appearing (prevents
             // the open-delay desync that left Debug Menu/FLICK un-closable).
             bool menuOpening = IsENBOpeningTransition() || NowMs() < g_MenuOpenLockUntilMs.load();
             if (f1JustPressed && !debugMenuOpening && !menuOpening) {
-                if (AreLauncherModifiersOk()) {
-                    long long now = NowMs();
-                    if (now - g_LastLauncherToggleMs.load() > 700) {
+                const bool launcherOpen = g_LauncherWindow && g_LauncherWindow->IsOpen.load();
+                const bool somethingOpen = launcherOpen || g_ActiveMenu.load() != ActiveMenu::None;
+                if (g_LauncherHotkeyEasyClose.load() && somethingOpen) {
+                    // Easy Close: a single bare press of the key closes whatever is open —
+                    // no modifier or double-tap required (opening still needs the full hotkey).
+                    ToggleLauncher();
+                } else if (AreLauncherModifiersOk()) {
+                    if (g_LauncherHotkeyDoubleTap.load()) {
+                        // The two-tap gesture is its own debounce — don't gate it on the 700ms timer.
                         if (CheckLauncherDoubleTap(now)) {
                             ToggleLauncher();
                         }
+                    } else if (now - g_LastLauncherToggleMs.load() > 700) {
+                        ToggleLauncher();
                     }
                 }
             }
@@ -1793,7 +2033,8 @@ static SHORT WINAPI HookedGetAsyncKeyState(int vKey) {
     const auto real = [&]() -> SHORT { return g_OrigGetAsyncKeyState ? g_OrigGetAsyncKeyState(vKey) : ::GetAsyncKeyState(vKey); };
     if (g_WaitingForHotkeyPress.load()) return real();
     if (vKey != 0 && (vKey == g_OARConfig.toggleVK || vKey == g_DMenuConfig.toggleVK ||
-        vKey == g_FLICKConfig.toggleVK || vKey == g_IEDConfig.toggleVK)) // [DIAG]
+        vKey == g_FLICKConfig.toggleVK || vKey == g_IEDConfig.toggleVK ||
+        vKey == g_KreatEConfig.toggleVK)) // [DIAG]
         DiagStack("GetAsyncKeyState", vKey);
 
     // OAR polls its configured key through User32. Hide only the toggle key and only
@@ -1803,6 +2044,20 @@ static SHORT WINAPI HookedGetAsyncKeyState(int vKey) {
     if (isOARKey && !g_UnblockOAR.load() && !IsUserTyping()) {
         const bool allowed = g_AllowOAROpen.load() && NowMs() <= g_AllowOAROpenUntilMs.load();
         if (!allowed && IsCallerModule(_ReturnAddress(), "OpenAnimationReplacer")) return 0;
+    }
+
+    const bool isKreatEKey = g_KreatEConfig.enabled && g_KreatEConfig.toggleVK != 0 &&
+        vKey == g_KreatEConfig.toggleVK;
+    if (isKreatEKey && !g_UnblockKreatE.load() && !IsUserTyping()) {
+        const bool allowed = g_AllowKreatEOpen.load() && NowMs() <= g_AllowKreatEOpenUntilMs.load();
+        if (!allowed && IsCallerModule(_ReturnAddress(), "KreatE")) return 0;
+    }
+
+    const bool isCSKey = g_CSConfig.enabled && g_CSConfig.toggleVK != 0 &&
+        vKey == g_CSConfig.toggleVK;
+    if (isCSKey && !g_UnblockCS.load() && !IsUserTyping()) {
+        const bool allowed = g_AllowCSOpen.load() && NowMs() <= g_AllowCSOpenUntilMs.load();
+        if (!allowed && IsCallerModule(_ReturnAddress(), "CommunityShaders")) return 0;
     }
 
     // Improved Camera polls its menu key. Hide the completed chord only from Improved
@@ -1844,7 +2099,8 @@ static SHORT WINAPI HookedGetKeyState(int vKey) {
     const auto real = [&]() -> SHORT { return g_OrigGetKeyState ? g_OrigGetKeyState(vKey) : ::GetKeyState(vKey); };
     if (g_WaitingForHotkeyPress.load()) return real();
     if (vKey != 0 && (vKey == g_OARConfig.toggleVK || vKey == g_DMenuConfig.toggleVK ||
-        vKey == g_FLICKConfig.toggleVK || vKey == g_IEDConfig.toggleVK)) // [DIAG]
+        vKey == g_FLICKConfig.toggleVK || vKey == g_IEDConfig.toggleVK ||
+        vKey == g_KreatEConfig.toggleVK)) // [DIAG]
         DiagStack("GetKeyState", vKey);
 
     const bool isOARKey = g_OARConfig.enabled && g_OARConfig.toggleVK != 0 &&
@@ -1852,6 +2108,20 @@ static SHORT WINAPI HookedGetKeyState(int vKey) {
     if (isOARKey && !g_UnblockOAR.load() && !IsUserTyping()) {
         const bool allowed = g_AllowOAROpen.load() && NowMs() <= g_AllowOAROpenUntilMs.load();
         if (!allowed && IsCallerModule(_ReturnAddress(), "OpenAnimationReplacer")) return 0;
+    }
+
+    const bool isKreatEKey = g_KreatEConfig.enabled && g_KreatEConfig.toggleVK != 0 &&
+        vKey == g_KreatEConfig.toggleVK;
+    if (isKreatEKey && !g_UnblockKreatE.load() && !IsUserTyping()) {
+        const bool allowed = g_AllowKreatEOpen.load() && NowMs() <= g_AllowKreatEOpenUntilMs.load();
+        if (!allowed && IsCallerModule(_ReturnAddress(), "KreatE")) return 0;
+    }
+
+    const bool isCSKey = g_CSConfig.enabled && g_CSConfig.toggleVK != 0 &&
+        vKey == g_CSConfig.toggleVK;
+    if (isCSKey && !g_UnblockCS.load() && !IsUserTyping()) {
+        const bool allowed = g_AllowCSOpen.load() && NowMs() <= g_AllowCSOpenUntilMs.load();
+        if (!allowed && IsCallerModule(_ReturnAddress(), "CommunityShaders")) return 0;
     }
 
     const bool isICKey = g_ImprovedCameraConfig.enabled && g_ImprovedCameraConfig.toggleVK != 0 &&
@@ -1889,7 +2159,7 @@ static SHORT WINAPI HookedGetKeyState(int vKey) {
 using ProcessInputEvent_t = RE::BSEventNotifyControl(*)(
     RE::BSTEventSink<RE::InputEvent*>*, RE::InputEvent* const*, RE::BSTEventSource<RE::InputEvent*>*);
 
-enum class ManagedSink { DMenu, IC, FLICK, IED, DebugMenu, MF };
+enum class ManagedSink { DMenu, IC, FLICK, IED, DebugMenu, CS, MF };
 
 static WORD SinkBlockDIK(ManagedSink m) {
     switch (m) {
@@ -1898,6 +2168,7 @@ static WORD SinkBlockDIK(ManagedSink m) {
         case ManagedSink::FLICK:     return g_FLICKConfig.toggleDIK;
         case ManagedSink::IED:       return g_IEDConfig.toggleDIK;
         case ManagedSink::DebugMenu: return g_DebugMenuConfig.toggleDIK;
+        case ManagedSink::CS:        return g_CSConfig.toggleDIK;
         case ManagedSink::MF:        return g_MFConfig.toggleDIK;
     }
     return 0;
@@ -1913,6 +2184,7 @@ static bool SinkLetThrough(ManagedSink m) {
         case ManagedSink::FLICK:     return g_UnblockFLICK.load()          || (g_AllowFLICKOpen.load()          && now <= g_AllowFLICKOpenUntilMs.load());
         case ManagedSink::IED:       return g_UnblockIED.load()            || (g_AllowIEDOpen.load()            && now <= g_AllowIEDOpenUntilMs.load());
         case ManagedSink::DebugMenu: return g_UnblockDebugMenu.load()      || (g_AllowDebugMenuOpen.load()      && now <= g_AllowDebugMenuOpenUntilMs.load());
+        case ManagedSink::CS:        return g_UnblockCS.load()             || (g_AllowCSOpen.load()             && now <= g_AllowCSOpenUntilMs.load());
         case ManagedSink::MF:        return false;
     }
     return false;
@@ -2033,6 +2305,7 @@ static void TryHookModSinks() {
         { "FUCK",                       ManagedSink::FLICK,     g_FLICKConfig.enabled },
         { "ImmersiveEquipmentDisplays", ManagedSink::IED,       g_IEDConfig.enabled },
         { "DebugMenu",                  ManagedSink::DebugMenu, g_DebugMenuConfig.enabled },
+        { "CommunityShaders",           ManagedSink::CS,        g_CSConfig.enabled },
         { "SKSEMenuFramework",          ManagedSink::MF,        true },
     };
 
@@ -2534,6 +2807,59 @@ static void OpenImprovedCamera() {
     }).detach();
 }
 
+static void OpenKreatE() {
+    if (!g_KreatEConfig.enabled || g_KreatEConfig.toggleDIK == 0) {
+        SKSE::log::warn("OpenKreatE: KreatE hotkey is not configured.");
+        return;
+    }
+
+    if (g_ActiveMenu.load() == ActiveMenu::KreatE) {
+        CloseLauncher();
+        CloseActiveModMenu(ActiveMenu::KreatE);
+        g_LastLauncherToggleMs.store(NowMs());
+        return;
+    }
+
+    CloseLauncher();
+    g_ActiveMenu.store(ActiveMenu::KreatE);
+    g_LastLauncherToggleMs.store(NowMs());
+    g_MenuOpenLockUntilMs.store(NowMs() + 1000);
+
+    std::thread([]() {
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        g_AllowKreatEOpen.store(true);
+        g_AllowKreatEOpenUntilMs.store(NowMs() + 1000);
+        SimulateModifiedKey(0, g_KreatEConfig.toggleDIK);
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        g_AllowKreatEOpen.store(false);
+        g_AllowKreatEOpenUntilMs.store(0);
+        SKSE::log::info("OpenKreatE: toggled KreatE with {}.", NameFromDIK(g_KreatEConfig.toggleDIK));
+    }).detach();
+}
+
+static void OpenCommunityShaders() {
+    if (!g_CSConfig.enabled || g_CSConfig.toggleDIK == 0) {
+        SKSE::log::warn("OpenCommunityShaders: Community Shaders hotkey is not configured.");
+        return;
+    }
+
+    if (g_ActiveMenu.load() == ActiveMenu::CS) {
+        CloseLauncher();
+        CloseActiveModMenu(ActiveMenu::CS);
+        g_LastLauncherToggleMs.store(NowMs());
+        return;
+    }
+
+    CloseLauncher();
+    g_ActiveMenu.store(ActiveMenu::CS);
+    g_LastLauncherToggleMs.store(NowMs());
+    g_AllowCSOpen.store(true);
+    g_AllowCSOpenUntilMs.store(NowMs() + 1000);
+    g_OpenInjectStep.store(0);
+    g_OpenInjectDIK.store(g_CSConfig.toggleDIK); // emit End through the engine (Process hook)
+    SKSE::log::info("OpenCommunityShaders: opening via engine key event {}.", NameFromDIK(g_CSConfig.toggleDIK));
+}
+
 
 static long long NowMs() {
     using namespace std::chrono;
@@ -2678,6 +3004,65 @@ static bool IsGameLoaded() {
     return true;
 }
 
+static const char* IniWriteStatus(int result) {
+    switch (result) {
+        case 1:  return "Changed this launch";
+        case 0:  return "Already configured";
+        case -1: return "Missing or write failed";
+        default: return "Not attempted";
+    }
+}
+
+static void LogStartupDiagnostics() {
+    const std::string launcher = FormatHotkey(g_LauncherHotkeyDIK.load(),
+        g_LauncherHotkeyCtrl.load(), g_LauncherHotkeyShift.load(), g_LauncherHotkeyAlt.load());
+
+    SKSE::log::info("========== Risa's Menu startup diagnostics ==========");
+    SKSE::log::info("Plugin version: {}", kRisaMenuVersion);
+    SKSE::log::info("Skyrim runtime: {} ({})", g_RuntimeVersion, g_RuntimeEdition);
+    SKSE::log::info("SKSE version: {}", g_SKSEVersion);
+    SKSE::log::info("Launcher hotkey: {}{}", launcher,
+        g_LauncherHotkeyDoubleTap.load() ? " [double tap]" : "");
+    SKSE::log::info("SKSE Menu Framework: detected={}, key={}, mode={}, INI result={}",
+        GetModuleHandleA("SKSEMenuFramework.dll") != nullptr,
+        g_MFConfig.toggleKeyName.empty() ? "Unknown" : g_MFConfig.toggleKeyName,
+        g_MFConfig.toggleMode.empty() ? "Unknown" : g_MFConfig.toggleMode,
+        IniWriteStatus(g_MFIniWriteResult.load()));
+    SKSE::log::info("Open Animation Replacer: detected={}, key={}, original Shift+O={}",
+        g_OARConfig.enabled,
+        g_OARConfig.enabled ? FormatHotkey(g_OARConfig.toggleDIK, g_OARConfig.ctrl, g_OARConfig.shift, g_OARConfig.alt) : "N/A",
+        g_UnblockOAR.load() ? "enabled" : "disabled");
+    SKSE::log::info("Immersive Equipment Displays: detected={}, key={}, original Backspace={}",
+        g_IEDConfig.enabled, g_IEDConfig.enabled ? FormatHotkey(g_IEDConfig.toggleDIK) : "N/A",
+        g_UnblockIED.load() ? "enabled" : "disabled");
+    SKSE::log::info("ENB Editor: detected={}, original Shift+Enter={}",
+        g_ENBConfig.enabled, g_UnblockENB.load() ? "enabled" : "disabled");
+    SKSE::log::info("Debug Menu: detected={}, key={}, original F1={}",
+        g_DebugMenuConfig.enabled,
+        g_DebugMenuConfig.enabled ? FormatHotkey(g_DebugMenuConfig.toggleDIK) : "N/A",
+        g_UnblockDebugMenu.load() ? "enabled" : "disabled");
+    SKSE::log::info("dMenu: detected={}, key={}, original Home={}",
+        g_DMenuConfig.enabled,
+        g_DMenuConfig.enabled ? FormatModifiedHotkey(g_DMenuConfig.toggleDIK, g_DMenuConfig.modifierDIK) : "N/A",
+        g_UnblockDMenu.load() ? "enabled" : "disabled");
+    SKSE::log::info("Improved Camera: detected={}, key={}, original Shift+Home={}",
+        g_ImprovedCameraConfig.enabled,
+        g_ImprovedCameraConfig.enabled ? FormatModifiedHotkey(g_ImprovedCameraConfig.toggleDIK, g_ImprovedCameraConfig.modifierDIK) : "N/A",
+        g_UnblockImprovedCamera.load() ? "enabled" : "disabled");
+    SKSE::log::info("FLICK: detected={}, key={}, original F7={}",
+        g_FLICKConfig.enabled, g_FLICKConfig.enabled ? FormatHotkey(g_FLICKConfig.toggleDIK) : "N/A",
+        g_UnblockFLICK.load() ? "enabled" : "disabled");
+    SKSE::log::info("KreatE: detected={}, key={}, original End={}, INI managed={}",
+        g_KreatEConfig.enabled, g_KreatEConfig.enabled ? FormatHotkey(g_KreatEConfig.toggleDIK) : "N/A",
+        g_UnblockKreatE.load() ? "enabled" : "disabled", g_KreatEIniManaged.load());
+    SKSE::log::info("Hooks: DI state={}, DI buffered={}, GetAsyncKeyState={}, GetKeyState={}, framework callback={}",
+        g_OrigGetDeviceState != nullptr, g_OrigGetDeviceData != nullptr,
+        g_OrigGetAsyncKeyState != nullptr, g_OrigGetKeyState != nullptr,
+        g_FrameworkInputEvent != nullptr);
+    SKSE::log::info("Privacy: data-relative paths only; no usernames, save names, hardware IDs, or unrelated mod list.");
+    SKSE::log::info("=====================================================");
+}
+
 // ============================================================================
 // Launcher render
 // ============================================================================
@@ -2707,19 +3092,69 @@ static void __stdcall RenderLauncher() {
     ImGuiMCP::PushStyleVar(10, 6.0f); // WindowRounding
     ImGuiMCP::PushStyleVar(13, 4.0f); // FrameRounding
 
-    constexpr int kFlags =
-        ImGuiMCP::ImGuiWindowFlags_NoResize |
-        ImGuiMCP::ImGuiWindowFlags_NoCollapse |
-        ImGuiMCP::ImGuiWindowFlags_NoScrollbar |
-        ImGuiMCP::ImGuiWindowFlags_AlwaysAutoResize;
+    // Per-tab window behavior:
+    //   Launcher tab — auto-sizes to its buttons (as before).
+    //   Settings tab — can get long, so it's manually resizable VERTICALLY only (width is
+    //   locked via equal min/max width) and shows a vertical scrollbar. The active tab is
+    //   known one frame late, which is fine.
+    static bool  s_settingsActive = false;       // which tab was active last frame
+    static bool  s_prevSettingsActive = false;
+    static float s_baseMenuWidth = 0.0f;         // unscaled width captured on the Launcher tab
+
+    const bool settingsActive = s_settingsActive;
+    const bool justSwitchedToSettings = settingsActive && !s_prevSettingsActive;
+    s_prevSettingsActive = settingsActive;
+
+    int kFlags = ImGuiMCP::ImGuiWindowFlags_NoCollapse;
+    if (settingsActive) {
+        const float layoutScaleVal = g_LauncherFontScale.load() / 0.9f;
+        const float w = (s_baseMenuWidth > 50.0f) ? (s_baseMenuWidth * layoutScaleVal) : (612.0f * layoutScaleVal);
+        float maxH = 800.0f;
+        if (auto* io = ImGuiMCP::GetIO()) maxH = io->DisplaySize.y * 0.92f;
+        const float minH = 220.0f;
+        // min.x == max.x locks the width, so dragging only resizes the height (bottom edge).
+        ImGuiMCP::SetNextWindowSizeConstraints(ImGuiMCP::ImVec2(w, minH), ImGuiMCP::ImVec2(w, maxH));
+        kFlags |= ImGuiMCP::ImGuiWindowFlags_NoScrollbar; // content scrolls in a child so the tab bar stays pinned
+        if (justSwitchedToSettings) {
+            float h = g_SettingsWindowHeight.load();
+            if (h < minH) h = minH;
+            if (h > maxH) h = maxH;
+            ImGuiMCP::SetNextWindowSize(ImGuiMCP::ImVec2(w, h), ImGuiMCP::ImGuiCond_Always);
+        }
+    } else {
+        kFlags |= ImGuiMCP::ImGuiWindowFlags_NoResize |
+                  ImGuiMCP::ImGuiWindowFlags_AlwaysAutoResize |
+                  ImGuiMCP::ImGuiWindowFlags_NoScrollbar;
+    }
 
     if (g_WindowPosX.load() != -1.0f && g_WindowPosY.load() != -1.0f) {
         ImGuiMCP::SetNextWindowPos(ImGuiMCP::ImVec2(g_WindowPosX.load(), g_WindowPosY.load()), ImGuiMCP::ImGuiCond_FirstUseEver, ImGuiMCP::ImVec2(0.0f, 0.0f));
+    } else if (auto* io = ImGuiMCP::GetIO()) {
+        ImGuiMCP::SetNextWindowPos(ImGuiMCP::ImVec2(io->DisplaySize.x * 0.5f, io->DisplaySize.y * 0.5f), ImGuiMCP::ImGuiCond_FirstUseEver, ImGuiMCP::ImVec2(0.5f, 0.5f));
     }
 
     bool open = true;
     if (!ImGuiMCP::Begin("Risa's Menu Launcher", &open, kFlags)) {
         ImGuiMCP::PopStyleVar(2); ImGuiMCP::PopStyleColor(4); ImGuiMCP::End(); return;
+    }
+
+    // Remember the natural width (Launcher tab) and the user-chosen Settings height. The height
+    // is persisted to the ini (debounced) so a resize survives restarts / new games.
+    if (settingsActive) {
+        const float h = ImGuiMCP::GetWindowHeight();
+        static long long s_heightChangedMs = 0;
+        const float dh = h - g_SettingsWindowHeight.load();
+        if (dh > 1.0f || dh < -1.0f) {
+            g_SettingsWindowHeight.store(h);
+            s_heightChangedMs = NowMs();
+        }
+        if (s_heightChangedMs != 0 && NowMs() - s_heightChangedMs > 1000) {
+            SaveButtonOrder();
+            s_heightChangedMs = 0;
+        }
+    } else {
+        const float layoutScaleVal = g_LauncherFontScale.load() / 0.9f;
+        s_baseMenuWidth = ImGuiMCP::GetWindowWidth() / layoutScaleVal;
     }
 
     {
@@ -2767,6 +3202,8 @@ static void __stdcall RenderLauncher() {
     const bool hasDMenu = g_DMenuConfig.enabled;
     const bool hasImprovedCamera = g_ImprovedCameraConfig.enabled;
     const bool hasFLICK = g_FLICKConfig.enabled;
+    const bool hasKreatE = g_KreatEConfig.enabled;
+    const bool hasCS = g_CSConfig.enabled;
 
     struct LauncherButton {
         std::string id;
@@ -2784,6 +3221,8 @@ static void __stdcall RenderLauncher() {
     allButtons.push_back({ "ImprovedCamera", FontAwesome::UnicodeToUtf8(0xf030) + "  Improved Camera SE", OpenImprovedCamera, hasImprovedCamera });
     allButtons.push_back({ "ENB", FontAwesome::UnicodeToUtf8(0xf53f) + "  ENB Editor", OpenENB, hasENB });
     allButtons.push_back({ "FLICK", FontAwesome::UnicodeToUtf8(0xf1b3) + "  FLICK", OpenFLICK, hasFLICK });
+    allButtons.push_back({ "KreatE", FontAwesome::UnicodeToUtf8(0xf53f) + "  KreatE", OpenKreatE, hasKreatE });
+    allButtons.push_back({ "CS", FontAwesome::UnicodeToUtf8(0xf043) + "  Community Shaders", OpenCommunityShaders, hasCS });
 
     // Filter to active buttons sorted by g_ButtonOrder
     std::vector<LauncherButton> buttons;
@@ -2815,8 +3254,9 @@ static void __stdcall RenderLauncher() {
                 size_t rightCount = N - leftCount;
 
                 auto DrawButton = [&](size_t i) {
-                    bool disabled = (buttons[i].id == "DebugMenu" || buttons[i].id == "ImprovedCamera" ||
-                                     buttons[i].id == "IED" || buttons[i].id == "ENB") && !IsGameLoaded();
+                    bool disabled = (buttons[i].id == "DebugMenu" ||
+                                     buttons[i].id == "IED" ||
+                                     buttons[i].id == "ENB") && !IsGameLoaded();
 
                     if (disabled) {
                         ImGuiMCP::PushStyleVar(ImGuiMCP::ImGuiStyleVar_Alpha, 0.4f);
@@ -2838,6 +3278,7 @@ static void __stdcall RenderLauncher() {
                         ImGuiMCP::PushStyleColor(21, ImGuiMCP::ImVec4(0.0f, 0.0f, 0.0f, 0.0f)); // Button Bg
                         ImGuiMCP::PushStyleColor(22, ImGuiMCP::ImVec4(0.0f, 0.0f, 0.0f, 0.0f)); // Button Hovered Bg
                         ImGuiMCP::PushStyleColor(23, ImGuiMCP::ImVec4(0.0f, 0.0f, 0.0f, 0.0f)); // Button Active Bg
+                        ImGuiMCP::PushStyleColor(5,  ImGuiMCP::ImVec4(0.0f, 0.0f, 0.0f, 0.0f)); // Border Color
                     }
 
                     FontAwesome::PushSolid();
@@ -2849,7 +3290,7 @@ static void __stdcall RenderLauncher() {
                     FontAwesome::Pop();
 
                     if (isBeingDragged) {
-                        ImGuiMCP::PopStyleColor(4);
+                        ImGuiMCP::PopStyleColor(5);
                     }
 
                     // Interactive reordering checks (run immediately after button submission)
@@ -2895,14 +3336,37 @@ static void __stdcall RenderLauncher() {
                         ImGuiMCP::GetMousePos(&mousePos);
                         ImGuiMCP::SetNextWindowPos(ImGuiMCP::ImVec2(mousePos.x - dragOffset.x, mousePos.y - dragOffset.y), ImGuiMCP::ImGuiCond_Always, ImGuiMCP::ImVec2(0.0f, 0.0f));
 
-                        // Temporarily disable window padding for tooltip to ensure precise alignment
+                        // Push window styles before Begin to draw the menu background and border around the dragged widget
+                        ImGuiMCP::PushStyleColor(2, ImGuiMCP::ImVec4(0.10f, 0.11f, 0.16f, 1.0f));  // WindowBg
+                        ImGuiMCP::PushStyleColor(5, ImGuiMCP::ImVec4(0.22f, 0.38f, 0.65f, 1.0f));  // Border
+                        ImGuiMCP::PushStyleVar(ImGuiMCP::ImGuiStyleVar_WindowRounding, 6.0f);
+                        ImGuiMCP::PushStyleVar(ImGuiMCP::ImGuiStyleVar_WindowBorderSize, 1.0f);
                         ImGuiMCP::PushStyleVar(ImGuiMCP::ImGuiStyleVar_WindowPadding, ImGuiMCP::ImVec2(0.0f, 0.0f));
-                        ImGuiMCP::Begin("##drag_preview", nullptr, ImGuiMCP::ImGuiWindowFlags_NoTitleBar | ImGuiMCP::ImGuiWindowFlags_NoResize | ImGuiMCP::ImGuiWindowFlags_NoMove | ImGuiMCP::ImGuiWindowFlags_NoSavedSettings | ImGuiMCP::ImGuiWindowFlags_Tooltip | ImGuiMCP::ImGuiWindowFlags_NoBackground);
+
+                        ImGuiMCP::Begin("##drag_preview", nullptr, ImGuiMCP::ImGuiWindowFlags_NoTitleBar | ImGuiMCP::ImGuiWindowFlags_NoResize | ImGuiMCP::ImGuiWindowFlags_NoMove | ImGuiMCP::ImGuiWindowFlags_NoSavedSettings | ImGuiMCP::ImGuiWindowFlags_Tooltip);
+                        ImGuiMCP::SetWindowFontScale(uiScale);
+
+                        // Push button styles
+                        ImGuiMCP::PushStyleColor(21, ImGuiMCP::ImVec4(0.14f, 0.28f, 0.52f, 1.0f)); // Button Bg
+                        ImGuiMCP::PushStyleColor(22, ImGuiMCP::ImVec4(0.22f, 0.42f, 0.74f, 1.0f)); // Button Hovered Bg
+                        ImGuiMCP::PushStyleColor(23, ImGuiMCP::ImVec4(0.09f, 0.18f, 0.36f, 1.0f)); // Button Active Bg
+                        ImGuiMCP::PushStyleVar(ImGuiMCP::ImGuiStyleVar_ButtonTextAlign, ImGuiMCP::ImVec2(0.0f, 0.5f));
+                        ImGuiMCP::PushStyleVar(ImGuiMCP::ImGuiStyleVar_FramePadding, ImGuiMCP::ImVec2(12.0f * layoutScale, 6.0f * layoutScale));
+                        ImGuiMCP::PushStyleVar(ImGuiMCP::ImGuiStyleVar_FrameRounding, 4.0f);
+
                         FontAwesome::PushSolid();
                         ImGuiMCP::Button(buttons[i].label.c_str(), launcherButtonSize);
                         FontAwesome::Pop();
+
+                        // Pop button styles
+                        ImGuiMCP::PopStyleVar(3);
+                        ImGuiMCP::PopStyleColor(3);
+
                         ImGuiMCP::End();
-                        ImGuiMCP::PopStyleVar(1);
+
+                        // Pop window styles
+                        ImGuiMCP::PopStyleVar(3);
+                        ImGuiMCP::PopStyleColor(2);
 
                         ImGuiMCP::EndDragDropSource();
                     }
@@ -2933,8 +3397,34 @@ static void __stdcall RenderLauncher() {
             ImGuiMCP::EndTabItem();
         }
 
-        if (ImGuiMCP::BeginTabItem((FontAwesome::UnicodeToUtf8(0xf013) + "  Settings").c_str(), nullptr, 0)) {
-            // UI Scale slider
+        const bool settingsTabOpen = ImGuiMCP::BeginTabItem((FontAwesome::UnicodeToUtf8(0xf013) + "  Settings").c_str(), nullptr, 0);
+        s_settingsActive = settingsTabOpen; // drives the per-tab resize/scroll behavior next frame
+        if (settingsTabOpen) {
+            // Scroll the Settings content inside a child window so the tab bar stays pinned at the top.
+            float settingsChildH;
+            if (settingsActive) {
+                ImGuiMCP::ImVec2 avail; ImGuiMCP::GetContentRegionAvail(&avail);
+                settingsChildH = avail.y;
+            } else {
+                settingsChildH = g_SettingsWindowHeight.load() - 70.0f; // 1-frame transition estimate
+            }
+            if (settingsChildH < 120.0f) settingsChildH = 120.0f;
+            ImGuiMCP::BeginChild("##SettingsScroll", ImGuiMCP::ImVec2(0.0f, settingsChildH), 0,
+                ImGuiMCP::ImGuiWindowFlags_AlwaysVerticalScrollbar);
+            ImGuiMCP::SetWindowFontScale(uiScale); // a child has its own font scale — match the UI scale
+
+            // Make section dividers clearly visible against the dark window background.
+            ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_Separator, ImGuiMCP::ImVec4(0.40f, 0.52f, 0.78f, 1.0f));
+
+            // Bold-ish (larger) blue section header followed by a divider.
+            auto SectionHeader = [&](const char* label) {
+                ImGuiMCP::SetWindowFontScale(uiScale * 1.20f);
+                ImGuiMCP::TextColored(ImGuiMCP::ImVec4(0.40f, 0.62f, 1.00f, 1.0f), "%s", label);
+                ImGuiMCP::SetWindowFontScale(uiScale);
+                ImGuiMCP::Separator();
+            };
+
+            SectionHeader("Menu");
             ImGuiMCP::Text("UI Scale:");
             float scale = g_LauncherFontScale.load();
             if (ImGuiMCP::SliderFloat("##FontScaleSlider", &scale, 0.6f, 1.4f, "%.2f", 0)) {
@@ -2943,20 +3433,26 @@ static void __stdcall RenderLauncher() {
             }
 
             ImGuiMCP::Text("Launcher Toggle Hotkey:");
+            const bool waitingForKey = g_WaitingForHotkeyPress.load();
             std::string hotkeyBtnLabel;
-            if (g_WaitingForHotkeyPress.load()) {
-                hotkeyBtnLabel = "[ Press any key... ]";
+            if (waitingForKey) {
+                hotkeyBtnLabel = "[ Press any key... ]##LauncherHotkeyBtn";
             } else {
                 std::string prefix = "";
                 if (g_LauncherHotkeyCtrl.load()) prefix += "Ctrl + ";
                 if (g_LauncherHotkeyShift.load()) prefix += "Shift + ";
                 if (g_LauncherHotkeyAlt.load()) prefix += "Alt + ";
-                hotkeyBtnLabel = prefix + NameFromDIK(g_LauncherHotkeyDIK.load()) + "  (Click to change)";
+                hotkeyBtnLabel = prefix + NameFromDIK(g_LauncherHotkeyDIK.load()) + "##LauncherHotkeyBtn";
             }
             if (ImGuiMCP::Button(hotkeyBtnLabel.c_str(), launcherButtonSize)) {
                 if (!g_WaitingForHotkeyPress.load()) {
                     g_WaitingForHotkeyPress.store(true);
                 }
+            }
+            if (!waitingForKey) {
+                ImGuiMCP::SameLine(0.0f, 8.0f * layoutScale);
+                ImGuiMCP::AlignTextToFramePadding();
+                ImGuiMCP::TextDisabled("(Click to change)");
             }
             if (g_WaitingForHotkeyPress.load()) {
                 // Intercept key presses
@@ -2984,6 +3480,7 @@ static void __stdcall RenderLauncher() {
             bool shiftVal = g_LauncherHotkeyShift.load();
             bool altVal = g_LauncherHotkeyAlt.load();
             bool doubleTapVal = g_LauncherHotkeyDoubleTap.load();
+            bool easyCloseVal = g_LauncherHotkeyEasyClose.load();
             bool hotkeyOptChanged = false;
 
             if (ImGuiMCP::Checkbox("Ctrl", &ctrlVal)) { g_LauncherHotkeyCtrl.store(ctrlVal); hotkeyOptChanged = true; }
@@ -2994,42 +3491,55 @@ static void __stdcall RenderLauncher() {
             ImGuiMCP::SameLine(0.0f, 8.0f * layoutScale);
             if (ImGuiMCP::Checkbox("Double Tap", &doubleTapVal)) { g_LauncherHotkeyDoubleTap.store(doubleTapVal); hotkeyOptChanged = true; }
 
+            if (ImGuiMCP::Checkbox("Easy Close (single key)", &easyCloseVal)) { g_LauncherHotkeyEasyClose.store(easyCloseVal); hotkeyOptChanged = true; }
+            ImGuiMCP::SetItemTooltip("Opening still needs the full hotkey (modifier and/or double-tap).\nWhile open, a single press of the key alone closes it.");
+
             if (hotkeyOptChanged) {
                 SaveButtonOrder();
             }
 
-            ImGuiMCP::Text("Original Mod Hotkeys:");
+            SectionHeader("Original Mod Hotkeys");
 
-            const float toggleButtonWidth = 120.0f * layoutScale;
-            const float toggleButtonHeight = 38.0f * layoutScale;
             const bool hotkeyTableOpen = ImGuiMCP::BeginTable(
-                "HotkeySettingsTable", 2, ImGuiMCP::ImGuiTableFlags_SizingStretchProp,
+                "HotkeySettingsTable", 3, ImGuiMCP::ImGuiTableFlags_SizingStretchProp,
                 ImGuiMCP::ImVec2((280.0f * 2.0f + 8.0f) * layoutScale, 0.0f));
             if (hotkeyTableOpen) {
-                ImGuiMCP::TableSetupColumn("Setting", ImGuiMCP::ImGuiTableColumnFlags_WidthStretch, 1.0f);
-                ImGuiMCP::TableSetupColumn("Action", ImGuiMCP::ImGuiTableColumnFlags_WidthFixed,
-                    136.0f * layoutScale);
+                ImGuiMCP::TableSetupColumn("Mod", ImGuiMCP::ImGuiTableColumnFlags_WidthStretch, 1.0f);
+                ImGuiMCP::TableSetupColumn("Default", ImGuiMCP::ImGuiTableColumnFlags_WidthFixed, 138.0f * layoutScale);
+                ImGuiMCP::TableSetupColumn("Enabled", ImGuiMCP::ImGuiTableColumnFlags_WidthFixed, 72.0f * layoutScale);
+                ImGuiMCP::TableHeadersRow();
             }
 
-            auto DrawOriginalHotkeyRow = [&](const char* label, const std::string& tooltip,
+            auto DrawOriginalHotkeyRow = [&](const char* id, const char* modName, const char* defaultHotkey,
+                    const std::string& tooltip,
                     std::atomic<bool>& setting, bool installed, bool originalAvailable, auto simulateAction) {
                 if (installed && hotkeyTableOpen) {
-                    ImGuiMCP::TableNextRow(0, 42.0f * layoutScale);
+                    ImGuiMCP::TableNextRow(0, 36.0f * layoutScale);
                     ImGuiMCP::TableSetColumnIndex(0);
+                    // The mod name is a button — click it to open/close that mod (debug helper).
+                    const std::string nameBtnLabel = std::string(modName) + "##ModBtn_" + id;
+                    if (ImGuiMCP::Button(nameBtnLabel.c_str(), ImGuiMCP::ImVec2(-1.0f, 0.0f))) {
+                        simulateAction();
+                    }
+                    ImGuiMCP::SetItemTooltip(("Click to open/close " + std::string(modName) + ".\n" + tooltip).c_str());
+
+                    ImGuiMCP::TableSetColumnIndex(1);
+                    ImGuiMCP::AlignTextToFramePadding();
+                    ImGuiMCP::Text("%s", defaultHotkey);
+                    ImGuiMCP::SetItemTooltip(tooltip.c_str());
+
+                    ImGuiMCP::TableSetColumnIndex(2);
                     bool val = originalAvailable && setting.load();
                     ImGuiMCP::BeginDisabled(!originalAvailable);
-                    if (ImGuiMCP::Checkbox(label, &val) && originalAvailable) {
+                    const std::string checkboxId = "##EnableOriginal_" + std::string(id);
+                    if (ImGuiMCP::Checkbox(checkboxId.c_str(), &val) && originalAvailable) {
                         setting.store(val);
                         SaveButtonOrder();
                     }
                     ImGuiMCP::EndDisabled();
-                    ImGuiMCP::SetItemTooltip(tooltip.c_str());
-
-                    ImGuiMCP::TableSetColumnIndex(1);
-                    std::string btnLabel = "Toggle##" + std::string(label);
-                    if (ImGuiMCP::Button(btnLabel.c_str(), ImGuiMCP::ImVec2(toggleButtonWidth, toggleButtonHeight))) {
-                        simulateAction();
-                    }
+                    std::string enableTip = "Enable " + std::string(modName) + "'s default hotkey in-game.";
+                    if (!originalAvailable) enableTip = tooltip;
+                    ImGuiMCP::SetItemTooltip(enableTip.c_str());
                 }
             };
 
@@ -3058,6 +3568,8 @@ static void __stdcall RenderLauncher() {
             const std::string icTooltip = MakeTooltip("SHIFT + HOME",
                 FormatModifiedHotkey(g_ImprovedCameraConfig.toggleDIK, g_ImprovedCameraConfig.modifierDIK));
             const std::string flickTooltip = MakeTooltip("F7", FormatHotkey(g_FLICKConfig.toggleDIK));
+            const std::string kreateTooltip = MakeTooltip("END", FormatHotkey(g_KreatEConfig.toggleDIK));
+            const std::string csTooltip = MakeTooltip("END", FormatHotkey(g_CSConfig.toggleDIK));
 
             const bool debugOriginalAvailable = g_LauncherHotkeyDIK.load() != 0x3B;
             std::string debugOriginalTooltip = debugMenuTooltip;
@@ -3065,36 +3577,73 @@ static void __stdcall RenderLauncher() {
                 debugOriginalTooltip += "\nUnavailable while the launcher uses F1.";
             }
 
-            DrawOriginalHotkeyRow("Enable OAR Original Hotkey", oarTooltip, g_UnblockOAR, hasOAR, true, []() {
+            DrawOriginalHotkeyRow("OAR", "Open Animation Replacer", "Shift + O", oarTooltip, g_UnblockOAR, hasOAR, true, []() {
                 OpenAnimationReplacer();
             });
-            DrawOriginalHotkeyRow("Enable IED Original Hotkey", iedTooltip, g_UnblockIED, hasIED, true, []() {
+            DrawOriginalHotkeyRow("IED", "IED", "Backspace", iedTooltip, g_UnblockIED, hasIED, true, []() {
                 OpenImmersiveEquipmentDisplays();
             });
-            DrawOriginalHotkeyRow("Enable ENB Original Hotkey", enbTooltip, g_UnblockENB, hasENB, true, []() {
+            DrawOriginalHotkeyRow("ENB", "ENB Editor", "Shift + Enter", enbTooltip, g_UnblockENB, hasENB, true, []() {
                 OpenENB();
             });
-            DrawOriginalHotkeyRow("Enable Debug Menu Original Hotkey", debugOriginalTooltip,
+            DrawOriginalHotkeyRow("DebugMenu", "Debug Menu", "F1", debugOriginalTooltip,
                 g_UnblockDebugMenu, hasDebugMenu, debugOriginalAvailable, []() {
                 OpenDebugMenu();
             });
-            DrawOriginalHotkeyRow("Enable dMenu Original Hotkey", dMenuTooltip, g_UnblockDMenu, hasDMenu, true, []() {
+            DrawOriginalHotkeyRow("dMenu", "dMenu", "Home", dMenuTooltip, g_UnblockDMenu, hasDMenu, true, []() {
                 OpenDMenu();
             });
-            DrawOriginalHotkeyRow("Enable Improved Camera Original Hotkey", icTooltip,
+            DrawOriginalHotkeyRow("ImprovedCamera", "Improved Camera", "Shift + Home", icTooltip,
                 g_UnblockImprovedCamera, hasImprovedCamera, true, []() {
                 OpenImprovedCamera();
             });
-            DrawOriginalHotkeyRow("Enable FLICK Original Hotkey", flickTooltip, g_UnblockFLICK, hasFLICK, true, []() {
+            DrawOriginalHotkeyRow("FLICK", "FLICK", "F7", flickTooltip, g_UnblockFLICK, hasFLICK, true, []() {
                 OpenFLICK();
+            });
+            DrawOriginalHotkeyRow("KreatE", "KreatE", "End", kreateTooltip, g_UnblockKreatE, hasKreatE, true, []() {
+                OpenKreatE();
+            });
+            DrawOriginalHotkeyRow("CS", "Community Shaders", "End", csTooltip, g_UnblockCS, hasCS, true, []() {
+                OpenCommunityShaders();
             });
 
             if (hotkeyTableOpen) {
                 ImGuiMCP::EndTable();
             }
 
+            SectionHeader("Uninstall");
+            {
+                static bool s_confirmRestore = false;
+                static bool s_restoreDone = false;
+                if (s_restoreDone) {
+                    ImGuiMCP::TextColored(ImGuiMCP::ImVec4(0.40f, 1.00f, 0.55f, 1.0f),
+                        "All hotkeys restored to their defaults.");
+                    ImGuiMCP::Text("Restart Skyrim once, then feel free to uninstall this mod.");
+                } else if (s_confirmRestore) {
+                    ImGuiMCP::TextColored(ImGuiMCP::ImVec4(1.00f, 0.65f, 0.30f, 1.0f),
+                        "Are you sure? This reverts every mod to its original hotkey.");
+                    if (ImGuiMCP::Button("Yes, restore defaults", ImGuiMCP::ImVec2(0.0f, 0.0f))) {
+                        RestoreAllModDefaults();
+                        s_confirmRestore = false;
+                        s_restoreDone = true;
+                    }
+                    ImGuiMCP::SameLine(0.0f, 8.0f * layoutScale);
+                    if (ImGuiMCP::Button("Cancel", ImGuiMCP::ImVec2(0.0f, 0.0f))) {
+                        s_confirmRestore = false;
+                    }
+                } else {
+                    if (ImGuiMCP::Button("Restore Default Hotkeys", launcherButtonSize)) {
+                        s_confirmRestore = true;
+                    }
+                    ImGuiMCP::SetItemTooltip("Reverts every managed mod's hotkey back to its original default,\nundoing all changes this mod made. Use this before uninstalling.");
+                }
+            }
+
+            ImGuiMCP::PopStyleColor(); // separator color
+            ImGuiMCP::EndChild();
             ImGuiMCP::EndTabItem();
         }
+
         ImGuiMCP::EndTabBar();
     }
 
@@ -3135,6 +3684,7 @@ static void EnsureLauncherKeyNoConflict() {
         if (g_FLICKConfig.enabled          && dik == g_FLICKConfig.toggleDIK)          return true;
         if (g_DebugMenuConfig.enabled      && dik == g_DebugMenuConfig.toggleDIK)      return true;
         if (g_IEDConfig.enabled            && dik == g_IEDConfig.toggleDIK)            return true;
+        if (g_KreatEConfig.enabled         && dik == g_KreatEConfig.toggleDIK)         return true;
         if (g_MFConfig.toggleDIK != 0      && dik == g_MFConfig.toggleDIK)             return true;
         return false;
     };
@@ -3175,6 +3725,7 @@ static void ManageDMenuKey() {
         if (g_FLICKConfig.enabled     && dik == g_FLICKConfig.toggleDIK)     return true;
         if (g_DebugMenuConfig.enabled && dik == g_DebugMenuConfig.toggleDIK) return true;
         if (g_IEDConfig.enabled       && dik == g_IEDConfig.toggleDIK)       return true;
+        if (g_KreatEConfig.enabled    && dik == g_KreatEConfig.toggleDIK)    return true;
         if (g_MFConfig.toggleDIK != 0 && dik == g_MFConfig.toggleDIK)        return true;
         if (dik == g_LauncherHotkeyDIK.load())                               return true;
         return false;
@@ -3232,6 +3783,7 @@ static void ManageDebugMenuKey() {
         if (g_ImprovedCameraConfig.enabled && dik == g_ImprovedCameraConfig.toggleDIK) return true;
         if (g_FLICKConfig.enabled          && dik == g_FLICKConfig.toggleDIK)          return true;
         if (g_IEDConfig.enabled            && dik == g_IEDConfig.toggleDIK)            return true;
+        if (g_KreatEConfig.enabled         && dik == g_KreatEConfig.toggleDIK)         return true;
         if (g_MFConfig.toggleDIK != 0      && dik == g_MFConfig.toggleDIK)             return true;
         return false;
     };
@@ -3302,6 +3854,162 @@ static int SetIniValue(const std::filesystem::path& ini, const std::string& keyN
     return 1;
 }
 
+static void TryManageKreatEHotkey(bool lateRetry) {
+    if (g_KreatEIniManaged.load() || !IsPluginPresent("KreatE")) return;
+
+    const long long now = NowMs();
+    if (lateRetry) {
+        const long long last = g_LastKreatEIniAttemptMs.exchange(now);
+        if (now - last < 2000) return;
+    }
+
+    const std::filesystem::path ini = "Data/KreatE/UserSettings.ini";
+    if (!std::filesystem::exists(ini)) return;
+    const int result = SetIniValue(ini, "GUIToggleKeys", VK_F18, true);
+    if (result < 0) return;
+
+    g_KreatEIniManaged.store(true);
+    if (result == 1) {
+        SKSE::log::info("TryManageKreatEHotkey: KreatE GUIToggleKeys -> F18 (was End).{}",
+            lateRetry ? " Restart Skyrim once so KreatE reads the generated setting." : "");
+    } else {
+        SKSE::log::info("TryManageKreatEHotkey: KreatE GUIToggleKeys is already F18.");
+    }
+}
+
+static int SetJsonKeyValue(const std::filesystem::path& path, const std::string& section, const std::string& key, int newValue) {
+    if (!std::filesystem::exists(path)) return -1;
+    try {
+        nlohmann::json j;
+        {
+            std::ifstream f(path);
+            if (!f.is_open()) return -1;
+            f >> j;
+        }
+        if (j.contains(section) && j[section].contains(key)) {
+            if (j[section][key] == newValue) return 0;
+            j[section][key] = newValue;
+        } else {
+            if (j.contains(section)) {
+                j[section][key] = newValue;
+            } else {
+                return -1;
+            }
+        }
+        std::ofstream out(path, std::ios::trunc);
+        if (!out.is_open()) return -1;
+        out << j.dump(4);
+        return 1;
+    } catch (...) {
+        return -1;
+    }
+}
+
+static std::atomic<bool> g_CSIniManaged{ false };
+static std::atomic<long long> g_LastCSIniAttemptMs{ 0 };
+
+static void TryManageCSHotkey(bool lateRetry) {
+    if (g_CSIniManaged.load() || !IsPluginPresent("CommunityShaders")) return;
+
+    const long long now = NowMs();
+    if (lateRetry) {
+        const long long last = g_LastCSIniAttemptMs.exchange(now);
+        if (now - last < 2000) return;
+    }
+
+    bool any = false;
+    const std::filesystem::path userJson = "Data/SKSE/Plugins/CommunityShaders/SettingsUser.json";
+    const std::filesystem::path defaultJson = "Data/SKSE/Plugins/CommunityShaders/SettingsDefault.json";
+
+    if (std::filesystem::exists(userJson)) {
+        int r = SetJsonKeyValue(userJson, "Menu", "ToggleKey", 130); // 130 = VK_F19
+        if (r == 1) any = true;
+    }
+    if (std::filesystem::exists(defaultJson)) {
+        int r = SetJsonKeyValue(defaultJson, "Menu", "ToggleKey", 130);
+        if (r == 1) any = true;
+    }
+
+    if (any) {
+        g_CSIniManaged.store(true);
+        SKSE::log::info("TryManageCSHotkey: Community Shaders ToggleKey -> VK_F19 (130). Restart required.");
+    } else if (std::filesystem::exists(userJson) || std::filesystem::exists(defaultJson)) {
+        g_CSIniManaged.store(true);
+        SKSE::log::info("TryManageCSHotkey: Community Shaders ToggleKey is already VK_F19.");
+    }
+}
+
+// Rewrite a text-valued INI setting while preserving all unrelated lines.
+static int SetIniTextValue(const std::filesystem::path& ini, const std::string& keyName,
+        const std::string& newValue) {
+    if (!std::filesystem::exists(ini)) {
+        SKSE::log::warn("SetIniTextValue: {} not found.", ini.string());
+        return -1;
+    }
+
+    std::vector<std::string> lines;
+    bool found = false;
+    bool changed = false;
+    const std::string key = ToUpper(keyName);
+    const std::string expected = ToUpper(newValue);
+    {
+        std::ifstream in(ini);
+        std::string line;
+        while (std::getline(in, line)) {
+            const std::string trimmed = TrimStr(line);
+            const auto eq = trimmed.find('=');
+            if (eq != std::string::npos && ToUpper(TrimStr(trimmed.substr(0, eq))) == key) {
+                found = true;
+                std::string current = TrimStr(trimmed.substr(eq + 1));
+                const auto comment = current.find(';');
+                if (comment != std::string::npos) current = TrimStr(current.substr(0, comment));
+                if (ToUpper(current) != expected) {
+                    line = std::format("{} = {}", keyName, newValue);
+                    changed = true;
+                }
+            }
+            lines.push_back(line);
+        }
+    }
+
+    if (!found) {
+        SKSE::log::warn("SetIniTextValue: key '{}' not found in {}.", keyName, ini.string());
+        return -1;
+    }
+    if (!changed) return 0;
+
+    std::ofstream out(ini, std::ios::trunc);
+    if (!out.is_open()) {
+        SKSE::log::error("SetIniTextValue: cannot write {}.", ini.string());
+        return -1;
+    }
+    for (const auto& line : lines) out << line << "\n";
+    return 1;
+}
+
+static void RestoreLegacyKreatEBlocking() {
+    const int original = g_LegacyKreatEOriginalBlocking.exchange(-1);
+    if (original < 0) return;
+
+    const std::filesystem::path ini = "Data/KreatE/UserSettings.ini";
+    const int result = SetIniTextValue(ini, "Blocking", original != 0 ? "true" : "false");
+    if (result >= 0) {
+        SKSE::log::info("RestoreLegacyKreatEBlocking: restored KreatE Input.Blocking to {} and removed the legacy keep-open option.", original != 0);
+        SaveButtonOrder();
+    }
+}
+
+static void DisableMFHotkey() {
+    const std::filesystem::path ini = "Data/SKSE/Plugins/SKSEMenuFramework.ini";
+    const int result = SetIniTextValue(ini, "ToggleMode", "OFF");
+    g_MFIniWriteResult.store(result);
+    if (result == 1) {
+        SKSE::log::info("DisableMFHotkey: set SKSE Menu Framework ToggleMode to OFF before it loaded.");
+    } else if (result == 0) {
+        SKSE::log::info("DisableMFHotkey: SKSE Menu Framework ToggleMode is already OFF.");
+    }
+}
+
 // Return the first candidate path that exists (handles MO2 mounting a mod's files under
 // different virtual locations than expected).
 static std::filesystem::path FindModFile(std::initializer_list<const char*> candidates) {
@@ -3351,6 +4059,43 @@ static void ManageModHotkeys() {
     if (any) SKSE::log::info("ManageModHotkeys: mod hotkeys changed — RESTART Skyrim once for them to take effect.");
 }
 
+// Revert every managed mod's hotkey back to its original default — undoes all the edits this
+// mod made. Intended as "uninstall prep": run it, restart once, then it's safe to disable the
+// mod and every other mod behaves as if Risa's menu had never touched it. Files that don't
+// exist are skipped automatically.
+static void RestoreAllModDefaults() {
+    SetIniValue("Data/SKSE/Plugins/OpenAnimationReplacer.ini", "uToggleUIKey", 24);      // O
+    SetIniValue("Data/SKSE/Plugins/OpenAnimationReplacer.ini", "uToggleUIKeyShift", 1);  // + Shift
+    SetIniValue("Data/SKSE/Plugins/dmenu/dmenu.ini", "key_toggle_dmenu", 199);           // Home
+    SetIniValue("Data/SKSE/Plugins/ImprovedCameraSE/ImprovedCameraSE.ini", "MenuKey", 0x24, true); // Home
+    SetIniValue("Data/SKSE/Plugins/ImmersiveEquipmentDisplays.ini", "ToggleKeys", 0x0E, true);     // Backspace
+
+    if (auto flick = FindModFile({ "Data/FUCKs/FUCK/keybinds.ini", "FUCKs/FUCK/keybinds.ini",
+                                   "Data/SKSE/Plugins/FUCKs/FUCK/keybinds.ini" }); !flick.empty()) {
+        SetIniValue(flick, "iToggleFUCK_Key", 65); // F7
+    }
+
+    {
+        std::filesystem::path dm = "Data/MCM/Settings/DebugMenu.ini";
+        if (!std::filesystem::exists(dm)) dm = "Data/MCM/Config/DebugMenu/settings.ini";
+        SetIniValue(dm, "uOpenMenuHotkey", 59); // F1
+    }
+
+    if (std::filesystem::exists("Data/KreatE/UserSettings.ini")) {
+        SetIniValue("Data/KreatE/UserSettings.ini", "GUIToggleKeys", VK_END, true); // End
+    }
+
+    if (std::filesystem::exists("Data/SKSE/Plugins/CommunityShaders/SettingsUser.json")) {
+        SetJsonKeyValue("Data/SKSE/Plugins/CommunityShaders/SettingsUser.json", "Menu", "ToggleKey", 35); // 35 = VK_END
+    }
+    if (std::filesystem::exists("Data/SKSE/Plugins/CommunityShaders/SettingsDefault.json")) {
+        SetJsonKeyValue("Data/SKSE/Plugins/CommunityShaders/SettingsDefault.json", "Menu", "ToggleKey", 35);
+    }
+
+    SaveButtonOrder();
+    SKSE::log::info("RestoreAllModDefaults: reverted all managed mods' hotkeys to their defaults.");
+}
+
 // ============================================================================
 // SKSE messaging
 // ============================================================================
@@ -3368,6 +4113,10 @@ static void MessageHandler(SKSE::MessagingInterface::Message* msg) {
         LoadDMenuConfig();
         LoadImprovedCameraConfig();
         LoadFLICKConfig();
+        LoadKreatEConfig();
+        LoadCSConfig();
+        TryManageKreatEHotkey();
+        TryManageCSHotkey();
         ManageModHotkeys();            // move OAR/dMenu/IC to unpressable F13-F15; disable FLICK's key
         // Debug Menu's collision was handled at the earliest plugin-load point.
         // NOTE: launcher key is intentionally NOT auto-reassigned — the user wants to keep F1.
@@ -3384,6 +4133,7 @@ static void MessageHandler(SKSE::MessagingInterface::Message* msg) {
         g_FrameworkInputEvent = SKSEMenuFramework::AddInputEvent(FrameworkInputCallback);
         SKSE::log::info("kPostLoad: SKSE Menu Framework input callback registered.");
         InstallHooks();
+        LogStartupDiagnostics();
         break;
     }
 
@@ -3419,17 +4169,28 @@ SKSEPluginInfo(
 SKSEPluginLoad(const SKSE::LoadInterface* skse) {
     SKSE::Init(skse);
     SetupLog();
+    g_RuntimeVersion = skse->RuntimeVersion().string(".");
+    g_SKSEVersion = REL::Version::unpack(skse->SKSEVersion()).string(".");
+    switch (REL::Module::GetRuntime()) {
+        case REL::Module::Runtime::SE: g_RuntimeEdition = "SE"; break;
+        case REL::Module::Runtime::AE: g_RuntimeEdition = "AE"; break;
+        case REL::Module::Runtime::VR: g_RuntimeEdition = "VR"; break;
+        default:                       g_RuntimeEdition = "Unknown"; break;
+    }
     SKSE::log::info("RisaAllInOneMenu loaded.");
+    SKSE::log::info("Diagnostics: plugin={}, Skyrim={} ({}), SKSE={}.",
+        kRisaMenuVersion, g_RuntimeVersion, g_RuntimeEdition, g_SKSEVersion);
 
-    // Run before kPostLoad so Debug Menu can observe the reassigned collision key during
-    // this launch. Load only the state required by the collision manager here; the normal
-    // full configuration pass still runs at kPostLoad.
+    // Run before the managed plugins load so they observe collision-safe settings during
+    // this launch. The normal full configuration pass still runs at kPostLoad.
     LoadButtonOrder();
+    RestoreLegacyKreatEBlocking();
+    DisableMFHotkey();
+    TryManageKreatEHotkey();
+    TryManageCSHotkey();
     LoadDebugMenuConfig();
     ManageDebugMenuKey();
 
-    // MF's own config remains untouched; its hotkey is silenced at runtime via its input
-    // sink. Debug Menu is the one startup-managed exception when its key collides with F1.
     auto* msg = SKSE::GetMessagingInterface();
     if (!msg || !msg->RegisterListener(MessageHandler)) {
         SKSE::log::error("Failed to register messaging listener."); return false;

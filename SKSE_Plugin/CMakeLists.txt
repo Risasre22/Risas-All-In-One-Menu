@@ -8,7 +8,7 @@ endif()
 
 set(VCPKG_TARGET_TRIPLET "x64-windows-static-md" CACHE STRING "vcpkg target triplet")
 
-project(RisaAllInOneMenu VERSION 1.1.0 LANGUAGES CXX)
+project(RisaAllInOneMenu VERSION 1.2.1 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -43,6 +43,7 @@ FetchContent_MakeAvailable(CommonLibSSE)
 find_package(fmt CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
 find_package(minhook CONFIG REQUIRED)
+find_package(nlohmann_json CONFIG REQUIRED)
 
 add_library(${PROJECT_NAME} SHARED src/main.cpp)
 
@@ -53,6 +54,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     fmt::fmt
     spdlog::spdlog
     minhook::minhook
+    nlohmann_json::nlohmann_json
     dinput8
     dxguid
 )

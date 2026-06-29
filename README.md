@@ -14,6 +14,8 @@ Press **F1** to open the launcher. Press **F1** again or **Escape** to close it.
 - Improved Camera SE
 - ENB Editor
 - FLICK
+- KreatE
+- Community Shaders
 
 Only installed integrations are shown.
 
@@ -26,6 +28,8 @@ Only installed integrations are shown.
 - Direct FLICK integration through its public API
 - Runtime hotkey interception scoped to supported mods where possible
 - Collision management for Debug Menu and dMenu
+- Detailed startup diagnostics in `RisaAllInOneMenu.log`
+- Logs Skyrim and SKSE versions, detected integrations, resolved hotkeys, configuration results, and hook status
 
 ## Transparency and Safety
 
@@ -34,6 +38,7 @@ This project was developed with AI assistance and tested iteratively in Skyrim. 
 The plugin:
 
 - Contains no networking or telemetry code
+- Keeps diagnostics local and excludes usernames, full local paths, save names, and unrelated mod lists
 - Does not download or execute external files
 - Does not contain Papyrus scripts
 - Reads supported mods' hotkey configuration files
