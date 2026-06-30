@@ -13,9 +13,10 @@ Press **F1** to open the launcher. Press **F1** again or **Escape** to close it.
 - dMenu
 - Improved Camera SE
 - ENB Editor
+- Community Shaders
+- ReShade
 - FLICK
 - KreatE
-- Community Shaders
 - CatMenu
 - Dragonborn's Toolkit
 
@@ -23,15 +24,17 @@ Only installed integrations are shown.
 
 ## Features
 
-- Configurable launcher hotkey
-- Per-mod controls for restoring original hotkeys
-- Drag-and-drop button ordering
-- Scalable UI with saved position
+- One launcher for every supported menu, opened from a single hotkey
+- Configurable launcher hotkey with optional modifiers (Ctrl/Shift/Alt), double-tap, and an "Easy Close" mode (single key press closes an open menu)
+- Rebindable hotkeys per mod: open Settings, click any mod's key, and press a new one. Your choices are saved and carry over through updates and new games
+- Per-mod toggle to allow a mod's original hotkey, or leave it freed for other gameplay mods
+- Conflict warning that flags when a mod's key matches the launcher key or another enabled mod, and auto-disables a mod set to the launcher key
+- Settings organized into collapsible, categorized sections (Menus & Tools, Animation & Gear, Visual and Lighting)
+- Drag-and-drop launcher button ordering
+- Scalable UI with saved size and position
 - Direct FLICK integration through its public API
 - Runtime hotkey interception scoped to supported mods where possible
-- Collision management for Debug Menu and dMenu
-- Detailed startup diagnostics in `RisaAllInOneMenu.log`
-- Logs Skyrim and SKSE versions, detected integrations, resolved hotkeys, configuration results, and hook status
+- Maintenance section with a "Restore Hotkeys for Uninstall" button and an optional logging toggle (off by default)
 
 ## Transparency and Safety
 
@@ -40,12 +43,11 @@ This project was developed with AI assistance and tested iteratively in Skyrim. 
 The plugin:
 
 - Contains no networking or telemetry code
-- Keeps diagnostics local and excludes usernames, full local paths, save names, and unrelated mod lists
+- Logging is off by default; when enabled it stays local and excludes usernames, full local paths, save names, and unrelated mod lists
 - Does not download or execute external files
 - Does not contain Papyrus scripts
-- Reads supported mods' hotkey configuration files
 - Writes its own settings file
-- May reassign Debug Menu or dMenu configuration keys when they conflict with the launcher or another managed menu
+- Reads supported mods' hotkey configuration files, and writes to them to relocate each mod's hotkey to an unused key so the original key is freed for other mods. Every such change is reversible from Settings → Maintenance → Restore Hotkeys for Uninstall
 - Uses MinHook for targeted input interception inside the Skyrim process
 
 The `1` prefix in `1RisaAllInOneMenu.dll` is intentional. It allows the startup collision adjustment to run before Debug Menu reads its hotkey. Do not rename the DLL.
@@ -57,6 +59,11 @@ The `1` prefix in `1RisaAllInOneMenu.dll` is intentional. It allows the startup 
 - SKSE Menu Framework
 
 The supported menu mods themselves are optional.
+
+## Installing, Updating, and Uninstalling
+
+- **After installing or updating:** launch and exit the game once before playing so the plugin can apply its hotkey relocations. Some supported mods read their configuration before this plugin loads, so the changes take effect on the next launch.
+- **Before uninstalling:** open the launcher, go to **Settings → Maintenance → Restore Hotkeys for Uninstall**, then restart once. This reverts every supported mod's hotkey to its original value. If you remove the plugin without doing this, those mods keep their relocated keys.
 
 ## Building
 
@@ -80,9 +87,9 @@ Windows users can alternatively run `SKSE_Plugin/build.bat` after setting `VCPKG
 
 ## Reporting Issues
 
-Include the following with bug reports:
+Logging is off by default. To capture a log, enable **Settings → Maintenance → Enable logging**, reproduce the issue, then include:
 
-- `RisaAllInOneMenu.log`
+- `RisaAllInOneMenu.log` (in `Documents/My Games/Skyrim Special Edition/SKSE/`)
 - Skyrim runtime version
 - SKSE version
 - Affected menu mod and version
