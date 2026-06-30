@@ -16,6 +16,8 @@ Press **F1** to open the launcher. Press **F1** again or **Escape** to close it.
 - FLICK
 - KreatE
 - Community Shaders
+- CatMenu
+- Dragonborn's Toolkit
 
 Only installed integrations are shown.
 
