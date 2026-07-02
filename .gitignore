@@ -1,16 +1,15 @@
 # Build products
-SKSE_Plugin/build/
-SKSE_Plugin/vcpkg/
-SKSE_Plugin/.vs/
+build/
+vcpkg/
+.vs/
 *.obj
 *.lib
 *.exp
 *.pdb
 
-# Runtime/release artifacts
-SKSE/Plugins/*.dll
-SKSE/Plugins/*.ini
+# Release archives (kept locally under releases/, not committed)
 *.7z
+releases/
 
 # Local editor and agent state
 .agents/
@@ -22,12 +21,7 @@ SKSE/Plugins/*.ini
 Thumbs.db
 .DS_Store
 
-# Stray/dev files
-/Menu
-/nefffffw*.txt
-/pdb_symbols_tmp.*
-Helper plugin*/
-
-# Debug input test helper (kept local, not part of the repo/release)
-SKSE_Plugin/src/input_test_helper.cpp
-SKSE_Plugin/INPUT_TEST_HELPER.md
+# Local-only dev tooling (kept out of the repo/release)
+tools/Helper plugin*/
+tools/input_test_helper.cpp
+docs/INPUT_TEST_HELPER.md

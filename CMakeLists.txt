@@ -64,8 +64,12 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
     OUTPUT_NAME "1RisaAllInOneMenu"
 )
 
-# Output the DLL directly into the mod's SKSE/Plugins folder so MO2 deploys it automatically
-set(OUTPUT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../SKSE/Plugins")
+# The project now lives outside the MO2 mod, so the built DLL is copied into the mod's
+# SKSE/Plugins folder for in-game testing via this deploy path. Defaults to the current MO2
+# location; override with -DRISA_DEPLOY_DIR=... (e.g. on another PC or if the mod folder moves).
+set(RISA_DEPLOY_DIR "F:/Games/Steam/steamapps/common/Mod Organizer/mods/Risa's All In One Menu/SKSE/Plugins"
+    CACHE PATH "Folder the built plugin DLL is copied into for testing (MO2 mod SKSE/Plugins).")
+set(OUTPUT_DIR "${RISA_DEPLOY_DIR}")
 set_target_properties(${PROJECT_NAME} PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY_RELEASE        "${OUTPUT_DIR}"
     RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${OUTPUT_DIR}"

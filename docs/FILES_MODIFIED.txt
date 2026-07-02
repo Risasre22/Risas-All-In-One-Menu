@@ -1,0 +1,29 @@
+RISA'S ALL IN ONE MENU - FILES IT READS/WRITES
+
+Paths are relative to the game Data folder. Under MO2 each file lives in that mod's
+own folder (Mod Organizer\mods\<mod>\<same path>); edits usually land in
+Mod Organizer\overwrite\<same path>.
+
+This mod (own settings) - SKSE\Plugins\RisaAllInOneMenu.ini
+SKSE Menu Framework - SKSE\Plugins\SKSEMenuFramework.ini
+Open Animation Replacer - SKSE\Plugins\OpenAnimationReplacer.ini
+dMenu / dMenu NG - SKSE\Plugins\dmenu\dmenu.ini
+Improved Camera - SKSE\Plugins\ImprovedCameraSE\ImprovedCameraSE.ini
+IED - SKSE\Plugins\ImmersiveEquipmentDisplays.ini
+FLICK - FUCKs\FUCK\keybinds.ini
+KreatE - KreatE\UserSettings.ini
+Community Shaders - SKSE\Plugins\CommunityShaders\SettingsUser.json
+Community Shaders - SKSE\Plugins\CommunityShaders\SettingsDefault.json
+Debug Menu - MCM\Settings\DebugMenu.ini
+Debug Menu - MCM\Config\DebugMenu\settings.ini
+CatMenu - SKSE\Plugins\catmenu\settings.json
+Dragonborn's Toolkit - SKSE\Plugins\SkyrimCheatMenu.json
+Skyrim Party Sheet - SKSE\Plugins\PartyUserSettings.ini
+
+Game root (next to SkyrimSE.exe) at RUNTIME - NOT in Data:
+ReShade - ReShade.ini   (WRITTEN: KeyOverlay changed)
+ENB - enblocal.ini      (READ ONLY: detect ENB / its editor key; never edited)
+
+Note: with MO2 + Root Builder these live in a mod's Root\ folder (e.g.
+mods\RESHADE\Root\ReShade.ini) and are staged into the game root only while the
+game runs. Without MO2 they sit permanently in the game root and are edited there.

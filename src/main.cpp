@@ -1518,7 +1518,7 @@ static long long NowMs();
 static bool CheckLauncherDoubleTap(long long now);
 static void InjectEngineKey(WORD dik, WORD modifier = 0);
 static void AddScanInput(INPUT& input, WORD scanCode, bool keyUp);
-static void CloseLauncher();
+static void CloseLauncher(bool external = false);
 static void ForceCloseSKSEMenuFramework();
 static void ToggleLauncher();
 static void SimulateModifiedKey(WORD modifierDIK, WORD keyDIK);
@@ -2481,6 +2481,9 @@ static void HookedKbProcess(RE::BSWin32KeyboardDevice* self, float a_dt) {
         } else if (s_sawCursorForActive) {
             g_ActiveMenu.store(ActiveMenu::None);
             s_sawCursorForActive = false;
+            // The menu was closed by ESC, not by us — backdate the toggle timestamp so the next F1
+            // opens the launcher cleanly instead of being spent "closing" a menu we no longer track.
+            g_LastLauncherToggleMs.store(now - 1000);
             SKSE::log::info("HookedKbProcess: active menu closed externally (cursor lost); state reset to None.");
         }
     }
@@ -3916,11 +3919,15 @@ static void InstallHooks() {
 // ============================================================================
 // Open MF from launcher using its exported main window.
 // ============================================================================
-static void CloseLauncher() {
+static void CloseLauncher(bool external) {
     if (g_LauncherWindow) {
         g_LauncherWindow->IsOpen.store(false);
         g_WaitForLauncherKeyRelease.store(false);
-        g_LastLauncherToggleMs.store(NowMs());
+        // On an EXTERNAL close (the user pressed ESC, not F1) backdate the toggle timestamp so the
+        // very next F1 is treated as a fresh press. Stamping "now" here would start a 700ms debounce
+        // anchored to the ESC, which swallowed the first F1 after closing (open -> ESC -> F1 did
+        // nothing -> F1 opened). F1-initiated closes still stamp normally so a held key can't spam.
+        g_LastLauncherToggleMs.store(external ? NowMs() - 1000 : NowMs());
     }
     if (!g_RememberSubView.load()) g_LauncherSubView.store(0); // back to the grid unless persistence is on
 }
@@ -5130,7 +5137,7 @@ static bool HandleLauncherHotkeys(RE::InputEvent* ev, const char* source) {
         return false;
 
     if (code == kEscapeDIK && g_LauncherWindow && g_LauncherWindow->IsOpen.load()) {
-        CloseLauncher();
+        CloseLauncher(true); // external ESC close — arm the next F1 for a fresh open
         SKSE::log::info("{}: launcher closed by ESC.", source);
         return true;
     }
@@ -5269,7 +5276,7 @@ static void __stdcall RenderLauncher() {
 
 
         if (ImGuiMCP::IsKeyPressed(ImGuiMCP::ImGuiKey_Escape, false)) {
-            CloseLauncher();
+            CloseLauncher(true); // external ESC close — arm the next F1 for a fresh open
             SKSE::log::info("ImGui input: launcher closed by ESC.");
             return;
         }
