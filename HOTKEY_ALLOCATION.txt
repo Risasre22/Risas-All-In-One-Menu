@@ -1,0 +1,130 @@
+RISA'S ALL IN ONE MENU - INTEGRATION AND HIDDEN KEY LEDGER
+Last updated: 2026-07-01
+
+
+PURPOSE
+-------
+
+This file answers two practical questions:
+
+1. Which integrations still depend on simulated or parked hotkeys?
+2. Which F13-F24 keys are safe to reuse?
+
+For the complete API, maintenance, and risk matrix, see INTEGRATION_STATUS.md.
+
+
+STATUS DEFINITIONS
+------------------
+
+[FREE]      Safe to assign to another integration.
+[RESERVED]  A supported mod still listens for or receives this key.
+[FALLBACK]  Reserved for a compatibility path, even if unused on this PC.
+
+Integration methods:
+
+[API]       Official interface supplied by the target mod or framework.
+[COMMAND]   Stable command supplied by the target mod.
+[INTERNAL]  Verified private function/state integration. Keyless, but version-sensitive.
+[SINK]      Delivers input only to the target mod's own SKSE input sink; no key is reserved.
+[HOTKEY]    The launcher still invokes a relocated or native hotkey.
+
+
+API OUTREACH PRIORITIES
+-----------------------
+
+Priority  Mod                       Last known update     Current limitation
+--------  ------------------------  -----------------  -----------------------------------------
+HIGH      Community Shaders           RECENT           Uses F15, F19, F23, and F24.
+MEDIUM    dMenu NG                  RECENT         API integrated; F14 stays parked to free Home.
+HIGH      KreatE                      RECENT          Uses F18. Author contacted.
+MEDIUM   Open Animation Replacer     RECENT           Opens internally, but F13 stays parked.
+MEDIUM   Debug Menu                RECENT          Still driven through its managed key.
+LOW       IED                        2023-12-10          Keyless internal path works; dormant mod.
+
+An API is still desirable for LOW-priority entries. LOW means the current internal method
+is practical and the mod appears unlikely to change, not that an official API has no value.
+
+
+KEY AVAILABILITY
+----------------
+
+Key   Status      Owner / reason
+---   ------      ------------------------------------------------------------
+F13   RESERVED    OAR native listener remains parked here.
+F14   RESERVED    dMenu native listener parked here (opened via dMenu NG API; park frees Home).
+F15   RESERVED    Community Shaders Editor listener.
+F16   FREE        IED is controlled through its native render-task lifecycle.
+F17   FREE        No current owner.
+F18   RESERVED    KreatE relocated listener.
+F19   RESERVED    Community Shaders main-menu listener.
+F20   FREE        No current owner.
+F21   FREE        CatMenu listener is intercepted; its saved value cannot react.
+F22   FALLBACK    ReShade non-add-on compatibility path.
+F23   RESERVED    Community Shaders Overlay listener.
+F24   RESERVED    Community Shaders Effect listener.
+
+Immediately reusable: F16, F17, F20, F21
+Conditionally available: F22 if ReShade's non-add-on fallback is removed
+Unavailable: F13, F14, F15, F18, F19, F22, F23, F24
+
+
+KEYLESS INTEGRATIONS
+--------------------
+
+Mod                         Method     Notes
+--------------------------  ---------  --------------------------------------------------------
+SKSE Menu Framework         API        Framework window API; native ToggleMode disabled.
+FLICK                       API        Official RequestFUCK API; native key disabled.
+ReShade add-on              API        ReShade add-on API; native overlay key disabled.
+Improved Camera Discord     COMMAND    Verified registered `ic menu` handler; Escape closes.
+Improved Camera public      INTERNAL   Verified live UIMenu open/close functions.
+IED 1.7.5b                  INTERNAL   Native render-task open, close, and state query.
+Dragonborn's Toolkit        INTERNAL   Internal SetMenuOpen(bool); native key disabled.
+CatMenu                     INTERNAL   Direct UI state; native listener intercepted.
+Skyrim Party Sheet          SINK       No hidden keys; Inspect Card uses a guarded native adapter.
+
+
+DIRECT, BUT A KEY REMAINS RESERVED
+----------------------------------
+
+Open Animation Replacer
+  Method: verified internal UIManager state.
+  F13 remains reserved because OAR's native listener is still parked there.
+  Never set OAR's key to 0: OAR interprets scan code 0 as the left mouse button.
+
+dMenu NG
+  Method: dMenu NG external-control API (SKSE message 0x444D4946 "DMIF" from sender "dmenu", with
+    a dMenu_GetInterface() export fallback). Open / close / toggle / is-open go straight through
+    the API -- no key simulation and a real menu-state query, so no more open/close desync.
+  F14 remains reserved because dMenu's native listener is still parked there to free Home.
+  Stock dMenu (no API) falls back to the F14 engine-injection path automatically (HasDMenuApi gate).
+
+
+HOTKEY-DEPENDENT INTEGRATIONS
+-----------------------------
+
+Mod                       Key(s)                 Notes
+------------------------  ---------------------  ---------------------------------------------
+dMenu (stock only)        F14                    Fallback: injected to open/close only when the dMenu NG API is absent.
+KreatE                    F18                    Relocated window/ImGui input listener.
+Community Shaders         F15, F19, F23, F24    Four separate menu actions.
+Debug Menu                F3                     Managed key outside the hidden-key pool.
+ENB Editor                Shift+Enter            Native chord; caller-scoped management.
+ReShade non-add-on        F22                    Compatibility fallback only.
+
+
+MODIFIER CHORDS
+---------------
+
+Ctrl, Shift, and Alt do not automatically multiply the available key pool. Some mods ignore
+modifiers and react to the base key. A chord is reusable only after that listener is tested or
+isolated. Current hidden-key modifier allocations: none.
+
+
+MAINTENANCE RULES
+-----------------
+
+1. Update this file whenever a key, fallback, listener, or opening method changes.
+2. Mark a key FREE only when no supported mod can react to its physical or injected event.
+3. Record author outreach and update activity in INTEGRATION_STATUS.md.
+4. Unknown DLL versions must fall back safely instead of calling unverified internal code.
