@@ -53,7 +53,7 @@ Key   Status      Owner / reason
 F13   RESERVED    OAR native listener remains parked here.
 F14   RESERVED    dMenu native listener parked here (opened via dMenu NG API; park frees Home).
 F15   RESERVED    Community Shaders Editor listener.
-F16   FREE        IED is controlled through its native render-task lifecycle.
+F16   RESERVED    IED parked here (OverrideToggleKeys=true); launcher opens it via native render task.
 F17   FREE        No current owner.
 F18   RESERVED    KreatE relocated listener.
 F19   RESERVED    Community Shaders main-menu listener.
@@ -63,9 +63,9 @@ F22   FALLBACK    ReShade non-add-on compatibility path.
 F23   RESERVED    Community Shaders Overlay listener.
 F24   RESERVED    Community Shaders Effect listener.
 
-Immediately reusable: F16, F17, F20, F21
+Immediately reusable: F17, F20, F21
 Conditionally available: F22 if ReShade's non-add-on fallback is removed
-Unavailable: F13, F14, F15, F18, F19, F22, F23, F24
+Unavailable: F13, F14, F15, F16, F18, F19, F22, F23, F24
 
 
 KEYLESS INTEGRATIONS

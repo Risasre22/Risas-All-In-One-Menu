@@ -1586,6 +1586,8 @@ static std::atomic<HWND>  g_GameHWND{ nullptr };
 //                    chained on top of our old proc), we jump straight here instead
 //                    of looping back through the chain.
 //   g_WndReentry   — per-thread re-entrancy depth guard.
+static bool IsCallerModule(void* returnAddr, const char* moduleName); // defined below
+
 using GetRawInputData_t = UINT(WINAPI*)(HRAWINPUT, UINT, LPVOID, PUINT, UINT);
 static GetRawInputData_t g_OrigGetRawInputData = nullptr;
 static std::atomic<bool> g_RawCtrlDown{ false };
@@ -1607,6 +1609,21 @@ static UINT WINAPI HookedGetRawInputData(HRAWINPUT hRawInput, UINT uiCommand, LP
             if (vkey == VK_CONTROL || vkey == VK_LCONTROL || vkey == VK_RCONTROL) g_RawCtrlDown.store(isDown);
             if (vkey == VK_SHIFT || vkey == VK_LSHIFT || vkey == VK_RSHIFT) g_RawShiftDown.store(isDown);
             if (vkey == VK_MENU || vkey == VK_LMENU || vkey == VK_RMENU) g_RawAltDown.store(isDown);
+
+            // IED reads WM_INPUT raw keyboard data directly (separate from DirectInput's
+            // curState, the event-sink stream, and WM_KEYDOWN) — none of our other blocks
+            // touch this channel. Hide the toggle key ONLY from IED's own read (caller-scoped,
+            // like the GetAsyncKeyState/GetKeyState blocks) so the key stays fully alive for the
+            // game, our launcher, and IED itself when the user enables the original hotkey.
+            if (g_IEDConfig.enabled && vkey == g_IEDConfig.toggleVK &&
+                !InternalAliasKeyAllowed(AI_IED, g_UnblockIED, g_IEDConfig.toggleDIK)) {
+                const bool allowed = g_AllowIEDOpen.load() && NowMs() <= g_AllowIEDOpenUntilMs.load();
+                if (!allowed && IsCallerModule(_ReturnAddress(), "ImmersiveEquipmentDisplays")) {
+                    raw->data.keyboard.VKey = 0xFF; // invalid VK — hidden from IED's raw-input read only
+                    raw->data.keyboard.MakeCode = 0;
+                    DiagOnce("RawInputBlockedIED", vkey, nullptr);
+                }
+            }
 
             const auto canOpenModal = [&]() {
                 return g_ActiveMenu.load() == ActiveMenu::None &&
@@ -1805,13 +1822,14 @@ static void CloseActiveModMenu(ActiveMenu active) {
             SKSE::log::info("CloseActiveModMenu: closed OAR directly.");
         }
     } else if (active == ActiveMenu::IED) {
-        if (SetIEDOpen(false)) {
-            SKSE::log::info("CloseActiveModMenu: closed IED through its native render task.");
-        } else {
-            std::thread([]() {
-            // NOTE: do NOT set g_AllowESCSinkBlock here — IED reads ESC from the buffered
-            // input, and that block strips ESC, preventing it from closing. IED consumes
-            // ESC itself while open, so the game won't pause.
+        // Close via simulated ESC — IED's own native close, which is proven to work. We do NOT use
+        // the native task-stop flag (SetIEDOpen(false)): that offset is unverified, doesn't actually
+        // close IED on this build, and always "succeeds" silently, leaving IED on screen while our
+        // state says closed. Open + is-open still use the verified native adapter; only close is ESC.
+        std::thread([]() {
+            // NOTE: do NOT set g_AllowESCSinkBlock here — IED reads ESC from the buffered input,
+            // and that block strips ESC, preventing it from closing. IED consumes ESC itself while
+            // open, so the game won't pause.
             INPUT downInput{};
             AddScanInput(downInput, kEscapeDIK, false);
             ::SendInput(1, &downInput, sizeof(INPUT));
@@ -1819,9 +1837,8 @@ static void CloseActiveModMenu(ActiveMenu active) {
             INPUT upInput{};
             AddScanInput(upInput, kEscapeDIK, true);
             ::SendInput(1, &upInput, sizeof(INPUT));
-            SKSE::log::info("CloseActiveModMenu: Closed IED via simulated ESC.");
-            }).detach();
-        }
+            SKSE::log::info("CloseActiveModMenu: closed IED via simulated ESC.");
+        }).detach();
     } else if (active == ActiveMenu::ENB) {
         g_ENBOpenRequestedMs.store(0);
         g_MenuOpenLockUntilMs.store(NowMs() + 1000);
@@ -2497,7 +2514,12 @@ static void HookedKbProcess(RE::BSWin32KeyboardDevice* self, float a_dt) {
                                         (g_AllowDragonbornOpen.load() && now <= g_AllowDragonbornOpenUntilMs.load());
                 const bool lockActive = IsENBOpeningTransition() || now < g_MenuOpenLockUntilMs.load();
                 const bool recentToggle = now - g_LastLauncherToggleMs.load() < 250;
-                if (diStale && !simulating && !lockActive && !recentToggle &&
+                // IED's menu swallows input while open, so the normal F1 channels miss it and it
+                // won't close on F1 (only ESC). Its native menu doesn't make the DI poll go stale,
+                // so also run this OS-level read while IED is the active menu. Debounce guards below
+                // stop any double-toggle if a normal channel also catches the key.
+                const bool capturingMenu = g_ActiveMenu.load() == ActiveMenu::IED;
+                if ((diStale || capturingMenu) && !simulating && !lockActive && !recentToggle &&
                     !IsRebinding() && !IsUserTyping()) {
                     const bool launcherOpen = g_LauncherWindow && g_LauncherWindow->IsOpen.load();
                     const bool somethingOpen = launcherOpen || g_ActiveMenu.load() != ActiveMenu::None;
@@ -2539,6 +2561,31 @@ static void HookedKbProcess(RE::BSWin32KeyboardDevice* self, float a_dt) {
             }
         } else {
             s_kreateCloseArmed = true;
+        }
+    }
+
+    // IED closes on ESC, not by re-pressing its toggle key, and it swallows input while open — so
+    // the original/alias key can't close it on its own. While IED is open (any open path) and the
+    // user enabled its hotkey, read the alias PHYSICALLY and close IED (via ESC) on a fresh press.
+    if (g_UnblockIED.load() && IsIEDOpen() && !IsRebinding() && !IsUserTyping()) {
+        const auto async = [&](int vk) {
+            return vk != 0 && ((g_OrigGetAsyncKeyState ? g_OrigGetAsyncKeyState(vk) : ::GetAsyncKeyState(vk)) & 0x8000) != 0;
+        };
+        const WORD ivk = VKFromDIK(g_AliasDik[AI_IED].load());
+        const bool iDown = async(ivk) &&
+            async(VK_CONTROL) == g_AliasCtrl[AI_IED].load() &&
+            async(VK_SHIFT) == g_AliasShift[AI_IED].load() &&
+            async(VK_MENU) == g_AliasAlt[AI_IED].load();
+        static bool s_iedCloseArmed = false; // require a release first (key is held right after opening)
+        if (iDown) {
+            if (s_iedCloseArmed && now - g_LastOriginalHotkeyMs.load() > 400) {
+                s_iedCloseArmed = false;
+                g_LastOriginalHotkeyMs.store(now);
+                SKSE::log::info("HookedKbProcess: IED alias (physical) closing IED.");
+                CloseActiveModMenu(ActiveMenu::IED);
+            }
+        } else {
+            s_iedCloseArmed = true;
         }
     }
 
@@ -2731,7 +2778,9 @@ static void PollOriginalHotkeyAliases(const BYTE* state) {
         !AliasEqualsLauncher(AI_CSEditor) && (aliasDown(AI_CSEditor) || physicalAliasDown(AI_CSEditor));
     const std::array<bool, 11> chordDown = {
         g_UnblockOAR.load() && g_OARConfig.enabled && OAROriginalMoved() && !AliasEqualsLauncher(AI_OAR) && aliasDown(AI_OAR),
-        g_UnblockIED.load() && g_IEDConfig.enabled && IEDOriginalMoved() && !AliasEqualsLauncher(AI_IED) && aliasDown(AI_IED),
+        g_UnblockIED.load() && g_IEDConfig.enabled &&
+            g_AliasDik[AI_IED].load() != g_IEDConfig.toggleDIK && // alias == real key: IED opens on it directly; only bridge a REBOUND key
+            !AliasEqualsLauncher(AI_IED) && aliasDown(AI_IED),
         g_UnblockENB.load() && g_ENBConfig.enabled && !enbAliasIsNative && !AliasEqualsLauncher(AI_ENB) && aliasDown(AI_ENB),
         g_UnblockDMenu.load() && g_DMenuConfig.enabled && DMenuOriginalMoved() && !AliasEqualsLauncher(AI_DMenu) && aliasDown(AI_DMenu),
         false, // Improved Camera aliases are handled once at the raw-input make edge.
@@ -4145,30 +4194,41 @@ static bool ResolveIEDNativeUI(std::uint8_t*& a_iui) {
     constexpr std::array<std::uint8_t, 11> kOpenThunkPrefix{
         0x48, 0x8B, 0x49, 0x08, 0x48, 0x81, 0xC1, 0x38, 0x16, 0x00, 0x00
     };
-    constexpr std::array<std::uint8_t, 10> kUIOpenPrefix{
-        0x53, 0x55, 0x56, 0x57, 0x41, 0x56, 0x48, 0x83, 0xEC, 0x30
+    // Real prologue at 0x158470 begins with a REX-prefixed `push rbx` (0x40 0x53). The original
+    // pattern dropped that leading 0x40 (disassembler off-by-one), so the check always failed even
+    // on the exact matched build. Verified against the on-disk bytes and the open-thunk's jmp target.
+    constexpr std::array<std::uint8_t, 11> kUIOpenPrefix{
+        0x40, 0x53, 0x55, 0x56, 0x57, 0x41, 0x56, 0x48, 0x83, 0xEC, 0x30
     };
 
-    if (nt->FileHeader.TimeDateStamp != kSupportedTimestamp ||
-        nt->OptionalHeader.SizeOfImage != kSupportedImageSize ||
-        std::memcmp(base + kOpenThunkRVA, kOpenThunkPrefix.data(), kOpenThunkPrefix.size()) != 0 ||
-        std::memcmp(base + kUIOpenRVA, kUIOpenPrefix.data(), kUIOpenPrefix.size()) != 0) {
+    // Log the exact failing step once per distinct reason (this fn is polled, so avoid spam).
+    static std::atomic<int> s_lastFail{ -99 };
+    auto fail = [&](int code, const char* why) -> bool {
+        if (s_lastFail.exchange(code) != code) SKSE::log::warn("ResolveIEDNativeUI: FAIL[{}] {}", code, why);
         return false;
-    }
+    };
+
+    if (nt->FileHeader.TimeDateStamp != kSupportedTimestamp) return fail(2, "TimeDateStamp mismatch");
+    if (nt->OptionalHeader.SizeOfImage != kSupportedImageSize) return fail(3, "SizeOfImage mismatch");
+    if (std::memcmp(base + kOpenThunkRVA, kOpenThunkPrefix.data(), kOpenThunkPrefix.size()) != 0) return fail(4, "open-thunk bytes mismatch");
+    if (std::memcmp(base + kUIOpenRVA, kUIOpenPrefix.data(), kUIOpenPrefix.size()) != 0) return fail(5, "UI-open bytes mismatch");
 
     using GetPluginInterface_t = void*(*)();
     auto getInterface = reinterpret_cast<GetPluginInterface_t>(
         ::GetProcAddress(module, "SKMP_GetPluginInterface"));
-    if (!getInterface) return false;
+    if (!getInterface) return fail(6, "SKMP_GetPluginInterface export not found");
 
     auto* pluginInterface = static_cast<std::uint8_t*>(getInterface());
-    if (!pluginInterface || !VtableInModule(pluginInterface, "ImmersiveEquipmentDisplays.dll")) return false;
+    if (!pluginInterface) return fail(7, "GetPluginInterface() returned null");
+    if (!VtableInModule(pluginInterface, "ImmersiveEquipmentDisplays.dll")) return fail(8, "pluginInterface vtable not in IED module");
     auto* controller = *reinterpret_cast<std::uint8_t**>(pluginInterface + 0x08);
-    if (!controller || !VtableInModule(controller, "ImmersiveEquipmentDisplays.dll")) return false;
+    if (!controller) return fail(9, "controller ptr null (IED UI not initialized yet?)");
+    if (!VtableInModule(controller, "ImmersiveEquipmentDisplays.dll")) return fail(10, "controller vtable not in IED module");
 
     auto* iui = controller + kIUISubobjectOffset;
-    if (!VtableInModule(iui, "ImmersiveEquipmentDisplays.dll")) return false;
+    if (!VtableInModule(iui, "ImmersiveEquipmentDisplays.dll")) return fail(11, "UI subobject vtable not in IED module");
     a_iui = iui;
+    if (s_lastFail.exchange(0) != 0) SKSE::log::info("ResolveIEDNativeUI: resolved OK (iui at {:p}).", static_cast<void*>(iui));
     return true;
 }
 
@@ -6610,6 +6670,144 @@ static void ManageReShadeHotkey() {
         ini.string());
 }
 
+// ============================================================================
+// Original-hotkey backup. Before the plugin relocates any mod's key, we record that
+// mod's ORIGINAL value here so Restore can put back exactly what the user had, instead
+// of a hard-coded guess. Stored as JSON (handles int keys, chord arrays, and strings).
+// Capture is once-only and skips values that are our own F-key relocations (so an
+// already-relocated install doesn't record a bogus "original").
+// ============================================================================
+static const char* kHotkeyBackupPath = "Data/SKSE/Plugins/RisaAllInOneMenu_OriginalHotkeys.json";
+static nlohmann::json g_HotkeyBackup;
+static bool g_HotkeyBackupLoaded = false;
+
+static void LoadHotkeyBackup() {
+    g_HotkeyBackup = nlohmann::json::object();
+    std::ifstream f(kHotkeyBackupPath);
+    if (f.is_open()) { try { f >> g_HotkeyBackup; } catch (...) { g_HotkeyBackup = nlohmann::json::object(); } }
+    if (!g_HotkeyBackup.is_object()) g_HotkeyBackup = nlohmann::json::object();
+    g_HotkeyBackupLoaded = true;
+    SKSE::log::info("HotkeyBackup: loaded {} saved original(s) from {}.", g_HotkeyBackup.size(), kHotkeyBackupPath);
+}
+static void SaveHotkeyBackup() {
+    std::ofstream out(kHotkeyBackupPath, std::ios::trunc);
+    if (!out.is_open()) { SKSE::log::error("HotkeyBackup: CANNOT WRITE {}.", kHotkeyBackupPath); return; }
+    out << g_HotkeyBackup.dump(2);
+}
+// Capture once. If value == skipReloc it's our own relocation, not a real original, so skip.
+static void CaptureOriginal(const std::string& id, const nlohmann::json& value, const nlohmann::json& skipReloc = nullptr) {
+    if (!g_HotkeyBackupLoaded) LoadHotkeyBackup();
+    if (g_HotkeyBackup.contains(id)) { SKSE::log::info("HotkeyBackup: {} already saved ({}) - keeping.", id, g_HotkeyBackup[id].dump()); return; }
+    if (value.is_null()) { SKSE::log::info("HotkeyBackup: {} not found on disk - nothing to capture.", id); return; }
+    if (!skipReloc.is_null() && value == skipReloc) {
+        SKSE::log::warn("HotkeyBackup: SKIP {} = {} (matches our relocation value - not a real original; likely an already-relocated install).", id, value.dump());
+        return;
+    }
+    g_HotkeyBackup[id] = value;
+    SaveHotkeyBackup();
+    SKSE::log::info("HotkeyBackup: CAPTURED {} = {} (original).", id, value.dump());
+}
+static nlohmann::json GetOriginal(const std::string& id) {
+    if (!g_HotkeyBackupLoaded) LoadHotkeyBackup();
+    return g_HotkeyBackup.contains(id) ? g_HotkeyBackup[id] : nlohmann::json(nullptr);
+}
+// Read an int-valued ini key (decimal or 0xHEX); null if missing/unparseable.
+static nlohmann::json ReadIniInt(const std::filesystem::path& ini, const std::string& keyName) {
+    if (!std::filesystem::exists(ini)) return nullptr;
+    std::ifstream f(ini); std::string line; const std::string KEY = ToUpper(keyName);
+    while (std::getline(f, line)) {
+        std::string t = TrimStr(line);
+        auto eq = t.find('=');
+        if (eq != std::string::npos && ToUpper(TrimStr(t.substr(0, eq))) == KEY) {
+            try { return static_cast<int>(std::stoul(TrimStr(t.substr(eq + 1)), nullptr, 0)); } catch (...) { return nullptr; }
+        }
+    }
+    return nullptr;
+}
+static nlohmann::json ReadJsonValue(const std::filesystem::path& path, const std::string& section, const std::string& key) {
+    if (!std::filesystem::exists(path)) return nullptr;
+    try { nlohmann::json j; std::ifstream f(path); f >> j;
+        if (!section.empty()) return (j.contains(section) && j[section].contains(key)) ? j[section][key] : nlohmann::json(nullptr);
+        return j.contains(key) ? j[key] : nlohmann::json(nullptr);
+    } catch (...) { return nullptr; }
+}
+// Capture the raw "KeyOverlay=..." value string from ReShade.ini (e.g. "36,0,0,0").
+static nlohmann::json ReadReShadeOverlay() {
+    auto rs = FindModFile({ "ReShade.ini", "Data/../ReShade.ini" });
+    if (rs.empty()) return nullptr;
+    std::ifstream f(rs); std::string line;
+    while (std::getline(f, line)) {
+        auto eq = line.find('=');
+        if (eq != std::string::npos && ToUpper(TrimStr(line.substr(0, eq))) == "KEYOVERLAY")
+            return TrimStr(line.substr(eq + 1));
+    }
+    return nullptr;
+}
+
+// Record each managed mod's ORIGINAL hotkey before we ever relocate it. Reads straight from disk,
+// so it must run before any TryManage*/ManageModHotkeys/ManageReShadeHotkey call.
+static void CaptureOriginalHotkeys() {
+    LoadHotkeyBackup();
+    const std::string oar = "Data/SKSE/Plugins/OpenAnimationReplacer.ini";
+    // OAR relocates uToggleUIKey to 100 (F13). Guard the whole chord on the main key.
+    if (ReadIniInt(oar, "uToggleUIKey") != nlohmann::json(100)) {
+        CaptureOriginal("OAR.uToggleUIKey",      ReadIniInt(oar, "uToggleUIKey"));
+        CaptureOriginal("OAR.uToggleUIKeyShift", ReadIniInt(oar, "uToggleUIKeyShift"));
+        CaptureOriginal("OAR.uToggleUIKeyCtrl",  ReadIniInt(oar, "uToggleUIKeyCtrl"));
+        CaptureOriginal("OAR.uToggleUIKeyAlt",   ReadIniInt(oar, "uToggleUIKeyAlt"));
+    } else SKSE::log::warn("HotkeyBackup: OAR already relocated (uToggleUIKey=100); not capturing.");
+
+    CaptureOriginal("dMenu.key_toggle_dmenu", ReadIniInt("Data/SKSE/Plugins/dmenu/dmenu.ini", "key_toggle_dmenu"), 101);   // 101 = F14
+    CaptureOriginal("IC.MenuKey",             ReadIniInt("Data/SKSE/Plugins/ImprovedCameraSE/ImprovedCameraSE.ini", "MenuKey"));
+    CaptureOriginal("IED.ToggleKeys",         ReadIniInt("Data/SKSE/Plugins/ImmersiveEquipmentDisplays.ini", "ToggleKeys"));
+    CaptureOriginal("KreatE.GUIToggleKeys",   ReadIniInt("Data/KreatE/UserSettings.ini", "GUIToggleKeys"), 129);            // 129 = F18
+
+    if (auto flick = FindModFile({ "Data/FUCKs/FUCK/keybinds.ini", "FUCKs/FUCK/keybinds.ini",
+                                   "Data/SKSE/Plugins/FUCKs/FUCK/keybinds.ini" }); !flick.empty())
+        CaptureOriginal("FLICK.iToggleFUCK_Key", ReadIniInt(flick, "iToggleFUCK_Key"), 0);                                  // 0 = disabled
+
+    // Community Shaders (relocates ToggleKey to VK_F19=0x88). Guard on the main key.
+    for (const char* p : { "Data/SKSE/Plugins/CommunityShaders/SettingsUser.json",
+                           "Data/SKSE/Plugins/CommunityShaders/SettingsDefault.json" }) {
+        if (!std::filesystem::exists(p)) continue;
+        const std::string tag = std::string("CS.") + (std::string(p).find("User") != std::string::npos ? "User." : "Default.");
+        if (ReadJsonValue(p, "Menu", "ToggleKey") != nlohmann::json(VK_F19)) {
+            CaptureOriginal(tag + "ToggleKey",         ReadJsonValue(p, "Menu", "ToggleKey"));
+            CaptureOriginal(tag + "CSEditorToggleKey", ReadJsonValue(p, "Menu", "CSEditorToggleKey"));
+            CaptureOriginal(tag + "OverlayToggleKey",  ReadJsonValue(p, "Menu", "OverlayToggleKey"));
+            CaptureOriginal(tag + "EffectToggleKey",   ReadJsonValue(p, "Menu", "EffectToggleKey"));
+        } else SKSE::log::warn("HotkeyBackup: CS already relocated in {}; not capturing.", p);
+    }
+
+    // ReShade: full "VK,ctrl,shift,alt" string. Skip our relocations (F22 = "133,0,0,0" or disabled "0,0,0,0").
+    if (auto ov = ReadReShadeOverlay(); !ov.is_null()) {
+        const std::string s = ov.get<std::string>();
+        if (s.rfind("133", 0) == 0 || s.rfind("0,", 0) == 0 || s == "0")
+            SKSE::log::warn("HotkeyBackup: SKIP ReShade.KeyOverlay = {} (our relocation/disabled value).", s);
+        else CaptureOriginal("ReShade.KeyOverlay", ov);
+    }
+    // Debug Menu (uOpenMenuHotkey, DIK). Only relocated on a launcher-key collision, to a free
+    // F-key from {F2,F3,F4,F6,F8}; skip those so we don't record a relocation as the original.
+    {
+        std::filesystem::path dm = "Data/MCM/Settings/DebugMenu.ini";
+        if (!std::filesystem::exists(dm)) dm = "Data/MCM/Config/DebugMenu/settings.ini";
+        if (auto v = ReadIniInt(dm, "uOpenMenuHotkey"); v.is_number_integer()) {
+            const int iv = v.get<int>();
+            if (iv == 0x3C || iv == 0x3D || iv == 0x3E || iv == 0x40 || iv == 0x42)
+                SKSE::log::warn("HotkeyBackup: SKIP DebugMenu.uOpenMenuHotkey = {} (our relocation F-key).", iv);
+            else CaptureOriginal("DebugMenu.uOpenMenuHotkey", v);
+        }
+    }
+    // CatMenu (JSON root toggle_key). Relocated to 592 (ImGuiKey_F21).
+    CaptureOriginal("CatMenu.toggle_key",
+        ReadJsonValue("Data/SKSE/Plugins/catmenu/settings.json", "", "toggle_key"), 592);
+    // Dragonborn's Toolkit (JSON root toggleKey, normally a string like "F1"). Disabled = int 0.
+    CaptureOriginal("Dragonborn.toggleKey",
+        ReadJsonValue("Data/SKSE/Plugins/SkyrimCheatMenu.json", "", "toggleKey"), 0);
+
+    SKSE::log::info("HotkeyBackup: capture pass complete ({} entries total).", g_HotkeyBackup.size());
+}
+
 static void ManageModHotkeys() {
     bool any = false;
     if (g_OARConfig.enabled) {
@@ -6648,8 +6846,26 @@ static void ManageModHotkeys() {
             any = true; SKSE::log::info("ManageModHotkeys: Improved Camera restored to Home; launcher opens its UIMenu directly.");
         }
     }
-    // Supported IED builds use the native render task. Unknown builds keep their existing
-    // configured key as a fallback, so new installations are no longer moved to F16.
+    if (g_IEDConfig.enabled) {
+        // IED ignores its ini ToggleKeys by default (OverrideToggleKeys=false) and uses the key
+        // set through its own UI — which no input hook can intercept, so physical Backspace kept
+        // opening it. Force IED to honor the ini and park its listener on the unpressable F16
+        // (DIK 0x67). Backspace is then fully freed; the launcher still opens IED via its native
+        // render task, and the optional Backspace alias is bridged by this plugin. Takes effect on
+        // the next launch (IED reads its ini before we run). Reverted to Backspace +
+        // OverrideToggleKeys=false by RestoreAllModDefaults on uninstall.
+        const std::filesystem::path ied = "Data/SKSE/Plugins/ImmersiveEquipmentDisplays.ini";
+        const int keyR = SetIniValue(ied, "ToggleKeys", 0x67, true);            // F16
+        const int ovrR = SetIniTextValue(ied, "OverrideToggleKeys", "true");
+        if (keyR >= 0) {
+            g_IEDConfig.toggleDIK = 0x67;
+            g_IEDConfig.toggleVK = VKFromDIK(0x67);
+        }
+        if (keyR == 1 || ovrR == 1) {
+            any = true;
+            SKSE::log::info("ManageModHotkeys: parked IED on F16 (0x67) with OverrideToggleKeys=true; Backspace freed. Launcher opens it via the native render task. RESTART once.");
+        }
+    }
     if (g_FLICKConfig.enabled) {
         auto flick = FindModFile({ "Data/FUCKs/FUCK/keybinds.ini", "FUCKs/FUCK/keybinds.ini",
                                    "Data/SKSE/Plugins/FUCKs/FUCK/keybinds.ini" });
@@ -6677,47 +6893,94 @@ static void ManageModHotkeys() {
 // mod and every other mod behaves as if Risa's menu had never touched it. Files that don't
 // exist are skipped automatically.
 static void RestoreAllModDefaults() {
-    SetIniValue("Data/SKSE/Plugins/OpenAnimationReplacer.ini", "uToggleUIKey", 24);      // O
-    SetIniValue("Data/SKSE/Plugins/OpenAnimationReplacer.ini", "uToggleUIKeyShift", 1);  // + Shift
-    SetIniValue("Data/SKSE/Plugins/dmenu/dmenu.ini", "key_toggle_dmenu", 199);           // Home
-    SetIniValue("Data/SKSE/Plugins/ImprovedCameraSE/ImprovedCameraSE.ini", "MenuKey", 0x24, true); // Home
-    SetIniValue("Data/SKSE/Plugins/ImmersiveEquipmentDisplays.ini", "ToggleKeys", 0x0E, true);     // Backspace
+    if (!g_HotkeyBackupLoaded) LoadHotkeyBackup();
+    SKSE::log::info("=== RestoreAllModDefaults START (prefers captured originals, else defaults) ===");
+
+    // Restore an int ini key from backup if we captured it, else from the given default.
+    auto ini = [&](const char* path, const char* key, const char* id, int def, bool hex = false) {
+        nlohmann::json o = GetOriginal(id);
+        const bool fromBak = o.is_number_integer();
+        const int v = fromBak ? o.get<int>() : def;
+        const int r = SetIniValue(path, key, v, hex);
+        SKSE::log::info("Restore[{}] {} = {} (result {}) <- {}", fromBak ? "BACKUP" : "default", key, v, r, id);
+    };
+    // Restore a JSON key from backup if captured, else default.
+    auto jkey = [&](const char* path, const char* section, const char* key, const char* id, const nlohmann::json& def) {
+        nlohmann::json o = GetOriginal(id);
+        const bool fromBak = !o.is_null();
+        const nlohmann::json& v = fromBak ? o : def;
+        const int r = SetJsonKeyValue(path, section, key, v);
+        SKSE::log::info("Restore[{}] {}.{} = {} (result {}) <- {}", fromBak ? "BACKUP" : "default", section, key, v.dump(), r, id);
+    };
+
+    ini("Data/SKSE/Plugins/OpenAnimationReplacer.ini", "uToggleUIKey",      "OAR.uToggleUIKey",      24);
+    ini("Data/SKSE/Plugins/OpenAnimationReplacer.ini", "uToggleUIKeyShift", "OAR.uToggleUIKeyShift", 1);
+    ini("Data/SKSE/Plugins/OpenAnimationReplacer.ini", "uToggleUIKeyCtrl",  "OAR.uToggleUIKeyCtrl",  0);
+    ini("Data/SKSE/Plugins/OpenAnimationReplacer.ini", "uToggleUIKeyAlt",   "OAR.uToggleUIKeyAlt",   0);
+    ini("Data/SKSE/Plugins/dmenu/dmenu.ini", "key_toggle_dmenu", "dMenu.key_toggle_dmenu", 199);
+    ini("Data/SKSE/Plugins/ImprovedCameraSE/ImprovedCameraSE.ini", "MenuKey", "IC.MenuKey", 0x24, true);
+    ini("Data/SKSE/Plugins/ImmersiveEquipmentDisplays.ini", "ToggleKeys", "IED.ToggleKeys", 0x0E, true);
     SetIniTextValue("Data/SKSE/Plugins/ImmersiveEquipmentDisplays.ini", "OverrideToggleKeys", "false");
 
     if (auto flick = FindModFile({ "Data/FUCKs/FUCK/keybinds.ini", "FUCKs/FUCK/keybinds.ini",
                                    "Data/SKSE/Plugins/FUCKs/FUCK/keybinds.ini" }); !flick.empty()) {
-        SetIniValue(flick, "iToggleFUCK_Key", 65); // F7
+        nlohmann::json o = GetOriginal("FLICK.iToggleFUCK_Key");
+        const bool fromBak = o.is_number_integer();
+        const int v = fromBak ? o.get<int>() : 65; // F7
+        SetIniValue(flick, "iToggleFUCK_Key", v);
+        SKSE::log::info("Restore[{}] iToggleFUCK_Key = {}", fromBak ? "BACKUP" : "default", v);
     }
 
     {
         std::filesystem::path dm = "Data/MCM/Settings/DebugMenu.ini";
         if (!std::filesystem::exists(dm)) dm = "Data/MCM/Config/DebugMenu/settings.ini";
-        SetIniValue(dm, "uOpenMenuHotkey", 59); // F1
+        nlohmann::json o = GetOriginal("DebugMenu.uOpenMenuHotkey");
+        const bool fromBak = o.is_number_integer();
+        const int v = fromBak ? o.get<int>() : 59; // F1
+        SetIniValue(dm, "uOpenMenuHotkey", v);
+        SKSE::log::info("Restore[{}] DebugMenu uOpenMenuHotkey = {}", fromBak ? "BACKUP" : "default", v);
     }
 
     if (std::filesystem::exists("Data/KreatE/UserSettings.ini")) {
-        SetIniValue("Data/KreatE/UserSettings.ini", "GUIToggleKeys", VK_END, true); // End
+        nlohmann::json o = GetOriginal("KreatE.GUIToggleKeys");
+        const bool fromBak = o.is_number_integer();
+        const int v = fromBak ? o.get<int>() : VK_END;
+        SetIniValue("Data/KreatE/UserSettings.ini", "GUIToggleKeys", v, true);
+        SKSE::log::info("Restore[{}] KreatE GUIToggleKeys = {}", fromBak ? "BACKUP" : "default", v);
     }
 
     if (std::filesystem::exists("Data/SKSE/Plugins/CommunityShaders/SettingsUser.json")) {
-        SetJsonKeyValue("Data/SKSE/Plugins/CommunityShaders/SettingsUser.json", "Menu", "ToggleKey", 35); // 35 = VK_END
-        SetJsonKeyValue("Data/SKSE/Plugins/CommunityShaders/SettingsUser.json", "Menu", "CSEditorToggleKey",
-            nlohmann::json::array({ VK_SHIFT, VK_END }));
-        SetJsonKeyValue("Data/SKSE/Plugins/CommunityShaders/SettingsUser.json", "Menu", "OverlayToggleKey", VK_F10);
-        SetJsonKeyValue("Data/SKSE/Plugins/CommunityShaders/SettingsUser.json", "Menu", "EffectToggleKey", VK_MULTIPLY);
+        jkey("Data/SKSE/Plugins/CommunityShaders/SettingsUser.json", "Menu", "ToggleKey",         "CS.User.ToggleKey", 35);
+        jkey("Data/SKSE/Plugins/CommunityShaders/SettingsUser.json", "Menu", "CSEditorToggleKey", "CS.User.CSEditorToggleKey", nlohmann::json::array({ VK_SHIFT, VK_END }));
+        jkey("Data/SKSE/Plugins/CommunityShaders/SettingsUser.json", "Menu", "OverlayToggleKey",  "CS.User.OverlayToggleKey", VK_F10);
+        jkey("Data/SKSE/Plugins/CommunityShaders/SettingsUser.json", "Menu", "EffectToggleKey",   "CS.User.EffectToggleKey", VK_MULTIPLY);
     }
     if (std::filesystem::exists("Data/SKSE/Plugins/CommunityShaders/SettingsDefault.json")) {
-        SetJsonKeyValue("Data/SKSE/Plugins/CommunityShaders/SettingsDefault.json", "Menu", "ToggleKey", 35);
-        SetJsonKeyValue("Data/SKSE/Plugins/CommunityShaders/SettingsDefault.json", "Menu", "CSEditorToggleKey",
-            nlohmann::json::array({ VK_SHIFT, VK_END }));
-        SetJsonKeyValue("Data/SKSE/Plugins/CommunityShaders/SettingsDefault.json", "Menu", "OverlayToggleKey", VK_F10);
-        SetJsonKeyValue("Data/SKSE/Plugins/CommunityShaders/SettingsDefault.json", "Menu", "EffectToggleKey", VK_MULTIPLY);
+        jkey("Data/SKSE/Plugins/CommunityShaders/SettingsDefault.json", "Menu", "ToggleKey",         "CS.Default.ToggleKey", 35);
+        jkey("Data/SKSE/Plugins/CommunityShaders/SettingsDefault.json", "Menu", "CSEditorToggleKey", "CS.Default.CSEditorToggleKey", nlohmann::json::array({ VK_SHIFT, VK_END }));
+        jkey("Data/SKSE/Plugins/CommunityShaders/SettingsDefault.json", "Menu", "OverlayToggleKey",  "CS.Default.OverlayToggleKey", VK_F10);
+        jkey("Data/SKSE/Plugins/CommunityShaders/SettingsDefault.json", "Menu", "EffectToggleKey",   "CS.Default.EffectToggleKey", VK_MULTIPLY);
     }
-    SetJsonRootValue("Data/SKSE/Plugins/catmenu/settings.json", "toggle_key", 577); // ImGuiKey_F6
-    SetJsonRootValue("Data/SKSE/Plugins/SkyrimCheatMenu.json", "toggleKey", "F1");
+    {
+        nlohmann::json o = GetOriginal("CatMenu.toggle_key");
+        const bool fromBak = o.is_number_integer();
+        const nlohmann::json v = fromBak ? o : nlohmann::json(577); // ImGuiKey_F6
+        SetJsonRootValue("Data/SKSE/Plugins/catmenu/settings.json", "toggle_key", v);
+        SKSE::log::info("Restore[{}] CatMenu toggle_key = {}", fromBak ? "BACKUP" : "default", v.dump());
+    }
+    {
+        nlohmann::json o = GetOriginal("Dragonborn.toggleKey");
+        const bool fromBak = !o.is_null();
+        const nlohmann::json v = fromBak ? o : nlohmann::json("F1");
+        SetJsonRootValue("Data/SKSE/Plugins/SkyrimCheatMenu.json", "toggleKey", v);
+        SKSE::log::info("Restore[{}] Dragonborn toggleKey = {}", fromBak ? "BACKUP" : "default", v.dump());
+    }
 
-        // ReShade: restore overlay key to Home (36).
+    // ReShade: restore the captured "VK,ctrl,shift,alt" string if we have it, else Home (36,0,0,0).
     if (const auto rs = FindModFile({ "ReShade.ini", "Data/../ReShade.ini" }); !rs.empty()) {
+        nlohmann::json o = GetOriginal("ReShade.KeyOverlay");
+        const bool fromBak = o.is_string();
+        const std::string val = fromBak ? o.get<std::string>() : std::string("36,0,0,0");
         std::vector<std::string> lines;
         bool found = false;
         {
@@ -6726,16 +6989,17 @@ static void RestoreAllModDefaults() {
             while (std::getline(f, line)) {
                 const auto eq = line.find('=');
                 if (eq != std::string::npos && ToUpper(TrimStr(line.substr(0, eq))) == "KEYOVERLAY") {
-                    line = "KeyOverlay=36,0,0,0"; found = true;
+                    line = "KeyOverlay=" + val; found = true;
                 }
                 lines.push_back(line);
             }
         }
         if (found) { std::ofstream out(rs, std::ios::trunc); for (const auto& l : lines) out << l << "\n"; }
+        SKSE::log::info("Restore[{}] ReShade KeyOverlay = {} (found line: {})", fromBak ? "BACKUP" : "default", val, found);
     }
 
     SaveButtonOrder();
-    SKSE::log::info("RestoreAllModDefaults: reverted all managed mods' hotkeys to their defaults.");
+    SKSE::log::info("=== RestoreAllModDefaults DONE. RESTART Skyrim once, THEN disable/remove the mod. ===");
 }
 
 // ============================================================================
@@ -6849,6 +7113,7 @@ SKSEPluginLoad(const SKSE::LoadInterface* skse) {
     // Run before the managed plugins load so they observe collision-safe settings during
     // this launch. The normal full configuration pass still runs at kPostLoad.
     LoadButtonOrder();
+    CaptureOriginalHotkeys(); // record each mod's ORIGINAL hotkey before we relocate anything
     RestoreLegacyKreatEBlocking();
     DisableMFHotkey();
     TryManageKreatEHotkey();
