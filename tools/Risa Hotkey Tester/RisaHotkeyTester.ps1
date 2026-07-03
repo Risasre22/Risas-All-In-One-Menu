@@ -633,4 +633,6 @@ if (-not $script:MORoot -and -not (Test-Path -LiteralPath (Join-Path $script:Gam
 Sync-ProfileEnabled
 Update-StatusLabel
 Show-Results 'current'
+# Bring the window to the front even when launched from a hidden host / over the game.
+$form.Add_Shown({ $form.Activate(); $form.TopMost = $true; $form.TopMost = $false })
 [void]$form.ShowDialog()

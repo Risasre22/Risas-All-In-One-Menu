@@ -1,5 +1,5 @@
 @echo off
-rem Hand off to the windowless VBS launcher and close this console immediately,
-rem so no cmd window stays open while the tester is running.
-start "" wscript.exe "%~dp0RisaHotkeyTester.vbs"
+rem Launch the tester with the PowerShell console hidden, then close this window
+rem immediately. Self-contained: does not depend on Windows Script Host / the .vbs.
+start "" powershell -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hidden -File "%~dp0RisaHotkeyTester.ps1"
 exit
