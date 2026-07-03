@@ -1,11 +1,9 @@
 RISA HOTKEY RESTORE TESTER
 ===========================
 
-LAUNCHING (no console window)
-  - Double-click RisaHotkeyTester.bat  (recommended - hides the PowerShell console and
-    closes its own window instantly; works even if Windows Script Host is disabled).
-  - RisaHotkeyTester.vbs also works for a zero-flash launch, but only if Windows Script
-    Host is enabled on your PC. If double-clicking the .vbs does nothing, use the .bat.
+LAUNCHING
+  - Double-click RisaHotkeyTester.bat. It hides the PowerShell console and closes its
+    own window instantly, so nothing lingers while the tester is open.
 
 SETUP
   1. Copy this entire folder into its own MO2 mod, for example "Risa's Tester".
