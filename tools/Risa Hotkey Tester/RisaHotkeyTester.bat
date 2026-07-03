@@ -1,4 +1,5 @@
 @echo off
-setlocal
-powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -File "%~dp0RisaHotkeyTester.ps1"
-endlocal
+rem Hand off to the windowless VBS launcher and close this console immediately,
+rem so no cmd window stays open while the tester is running.
+start "" wscript.exe "%~dp0RisaHotkeyTester.vbs"
+exit

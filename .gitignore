@@ -25,3 +25,6 @@ Thumbs.db
 tools/Helper plugin*/
 tools/input_test_helper.cpp
 docs/INPUT_TEST_HELPER.md
+
+# Hotkey tester runtime state (snapshots, expected values, results)
+tools/Risa Hotkey Tester/TesterData/

@@ -1,6 +1,8 @@
 param(
     [string]$Root = '',
     [string]$StatePath = '',
+    [string]$Mode = '',
+    [string]$Profile = '',
     [switch]$NoGui,
     [switch]$Report
 )
@@ -17,6 +19,8 @@ $script:SnapshotRoot = Join-Path $script:StateRoot 'Snapshots'
 $script:ExpectedCustomPath = Join-Path $script:StateRoot 'ExpectedCustom.json'
 $script:LastResultsPath = Join-Path $script:StateRoot 'LastResults.txt'
 $script:LastReport = ''
+$script:LastMode = 'current'
+$script:ShowFullPath = $false
 New-Item -ItemType Directory -Path $script:SnapshotRoot -Force | Out-Null
 
 # When installed as its own MO2 mod, infer Mod Organizer directly from
@@ -28,36 +32,64 @@ while ($probe) {
     $probe = $probe.Parent
 }
 $script:MORoot = if ($script:ModsRoot) { Split-Path -Parent $script:ModsRoot } else { $null }
-$script:SearchRoots = @()
-$script:ProfileName = ''
-if ($script:MORoot) {
-    $overwrite = Join-Path $script:MORoot 'overwrite'
-    if (Test-Path -LiteralPath $overwrite -PathType Container) { $script:SearchRoots += $overwrite }
 
-    $enabledNames = @()
+# Discover MO2 details: the selected profile, all profiles, and the real Skyrim game path.
+$script:ProfileName = ''
+$script:Profiles = @()
+$script:MOGamePath = $null
+if ($script:MORoot) {
     $ini = Join-Path $script:MORoot 'ModOrganizer.ini'
     if (Test-Path -LiteralPath $ini) {
         $selected = Select-String -LiteralPath $ini -Pattern '^selected_profile=@ByteArray\((.*)\)$' | Select-Object -First 1
-        if ($selected) {
-            $script:ProfileName = $selected.Matches[0].Groups[1].Value
-            $modList = Join-Path $script:MORoot ("profiles\$($script:ProfileName)\modlist.txt")
-            if (Test-Path -LiteralPath $modList) {
-                $enabledNames = @(Get-Content -LiteralPath $modList | Where-Object { $_ -like '+*' } | ForEach-Object { $_.Substring(1) })
-            }
+        if ($selected) { $script:ProfileName = $selected.Matches[0].Groups[1].Value }
+        $gp = Select-String -LiteralPath $ini -Pattern '^gamePath=(.*)$' | Select-Object -First 1
+        if ($gp) {
+            $raw = $gp.Matches[0].Groups[1].Value.Trim()
+            if ($raw -match '^@ByteArray\((.*)\)$') { $raw = $Matches[1] }
+            $raw = ($raw -replace '\\\\','\') -replace '/','\'
+            if (Test-Path -LiteralPath $raw -PathType Container) { $script:MOGamePath = $raw }
         }
     }
-    # MO2 writes higher-priority enabled mods first in modlist.txt for this setup.
-    foreach ($name in $enabledNames) {
-        $dir = Join-Path $script:ModsRoot $name
-        if (Test-Path -LiteralPath $dir -PathType Container) { $script:SearchRoots += $dir }
+    $profDir = Join-Path $script:MORoot 'profiles'
+    if (Test-Path -LiteralPath $profDir) {
+        $script:Profiles = @(Get-ChildItem -LiteralPath $profDir -Directory | ForEach-Object { $_.Name })
     }
-    # If no profile could be read, fall back to all mod folders. When a profile is available,
-    # intentionally exclude '-' entries so disabled mods are never inspected or modified.
-    if ($enabledNames.Count -eq 0) {
-        foreach ($dir in Get-ChildItem -LiteralPath $script:ModsRoot -Directory) {
-            $script:SearchRoots += $dir.FullName
+}
+$script:HasMO = [bool]$script:MORoot
+
+function Get-ProfileSearchRoots($profileName) {
+    $roots = @()
+    $overwrite = Join-Path $script:MORoot 'overwrite'
+    if (Test-Path -LiteralPath $overwrite -PathType Container) { $roots += $overwrite }
+    $modList = Join-Path $script:MORoot ("profiles\$profileName\modlist.txt")
+    if (Test-Path -LiteralPath $modList) {
+        # MO2 writes higher-priority enabled mods first; '-' entries stay disabled and are skipped.
+        $enabled = @(Get-Content -LiteralPath $modList | Where-Object { $_ -like '+*' } | ForEach-Object { $_.Substring(1) })
+        foreach ($name in $enabled) {
+            $dir = Join-Path $script:ModsRoot $name
+            if (Test-Path -LiteralPath $dir -PathType Container) { $roots += $dir }
         }
     }
+    return $roots
+}
+
+# Choose where files are read/written from:
+#   Skyrim         -> the real game Data folder (physical install).
+#   Mod Organizer  -> a chosen MO2 profile's mod priority + the overwrite folder.
+function Set-SourceMode($mode, $profileName) {
+    $script:CurrentMode = $mode
+    if ($mode -eq 'Mod Organizer' -and $script:MORoot) {
+        $script:CurrentProfile = if ($profileName) { $profileName } else { $script:ProfileName }
+        $script:SearchRoots = Get-ProfileSearchRoots $script:CurrentProfile
+        if ($script:MOGamePath) { $script:GameRoot = $script:MOGamePath }
+    } else {
+        $script:CurrentMode = 'Skyrim'
+        $script:CurrentProfile = ''
+        $script:SearchRoots = @()   # empty -> Resolve-SpecPath falls back to the physical game folder
+        if ($Root) { $script:GameRoot = [IO.Path]::GetFullPath($Root) }
+        elseif ($script:MOGamePath) { $script:GameRoot = $script:MOGamePath }
+    }
+    $script:DataRoot = Join-Path $script:GameRoot 'Data'
 }
 
 function Spec($mod, $setting, $type, $paths, $key, $default, $random, $section = '') {
@@ -68,7 +100,7 @@ function Spec($mod, $setting, $type, $paths, $key, $default, $random, $section =
     }
 }
 
-# Defaults mirror Restore Supported Mod Defaults in Risa 1.5.2.
+# Defaults mirror Restore Supported Mod Defaults in Risa 1.5.3.
 $script:Specs = @(
     (Spec 'SKSE Menu Framework' 'ToggleKey' 'ini' @('Data\SKSE\Plugins\SKSEMenuFramework.ini') 'ToggleKey' 'F1' @('F4','F8','F10')),
     (Spec 'SKSE Menu Framework' 'ToggleMode' 'ini' @('Data\SKSE\Plugins\SKSEMenuFramework.ini') 'ToggleMode' 'SinglePress' @('Hold','DoublePress')),
@@ -123,7 +155,7 @@ function Resolve-SpecPath($spec) {
             }
         }
     }
-    # Fall back to a physical game installation for non-MO2 use.
+    # Fall back to a physical game installation for non-MO2 use / Skyrim mode.
     foreach ($candidate in $spec.Paths) {
         $path = [IO.Path]::GetFullPath((Join-Path $script:GameRoot $candidate))
         if (Test-Path -LiteralPath $path -PathType Leaf) { return $path }
@@ -145,11 +177,19 @@ function Get-SnapshotRelative($path) {
     return Join-Path 'other' ([IO.Path]::GetFileName($path))
 }
 
+function Display-Path($path) {
+    if (-not $path) { return '' }
+    if ($script:ShowFullPath) { return $path }
+    return Get-SnapshotRelative $path
+}
+
 function Resolve-OriginalBackupPath {
     $backupSpec = [pscustomobject]@{ Paths = @('Data\SKSE\Plugins\RisaAllInOneMenu_OriginalHotkeys.json') }
     $existing = Resolve-SpecPath $backupSpec
     if ($existing) { return $existing }
-    if ($script:MORoot) { return Join-Path $script:MORoot 'overwrite\SKSE\Plugins\RisaAllInOneMenu_OriginalHotkeys.json' }
+    if ($script:CurrentMode -eq 'Mod Organizer' -and $script:MORoot) {
+        return Join-Path $script:MORoot 'overwrite\SKSE\Plugins\RisaAllInOneMenu_OriginalHotkeys.json'
+    }
     return Join-Path $script:GameRoot 'Data\SKSE\Plugins\RisaAllInOneMenu_OriginalHotkeys.json'
 }
 
@@ -349,9 +389,15 @@ function Assert-SkyrimClosed {
     }
 }
 
+# Initialise the source mode before any headless (Report/NoGui) use.
+$initialMode = if ($Mode) { $Mode } else { 'Skyrim' }
+Set-SourceMode $initialMode $Profile
+
 if ($Report) {
-    "Profile=$($script:ProfileName)"
+    "Mode=$($script:CurrentMode)"
+    "Profile=$($script:CurrentProfile)"
     "ModsRoot=$($script:ModsRoot)"
+    "GameRoot=$($script:GameRoot)"
     foreach ($spec in $script:Specs) {
         $resolved = Resolve-SpecPath $spec
         [pscustomobject]@{ Mod=$spec.Mod; Setting=$spec.Setting; Found=[bool]$resolved; Path=$resolved }
@@ -361,32 +407,88 @@ if ($NoGui) { return }
 
 $form = New-Object Windows.Forms.Form
 $form.Text = 'Risa Hotkey Restore Tester'
-$form.Size = New-Object Drawing.Size(1180,760)
+$form.Size = New-Object Drawing.Size(1180,790)
 $form.StartPosition = 'CenterScreen'
-$form.MinimumSize = New-Object Drawing.Size(950,600)
+$form.MinimumSize = New-Object Drawing.Size(950,640)
 
+$tip = New-Object Windows.Forms.ToolTip
+$tip.AutoPopDelay = 20000; $tip.InitialDelay = 300; $tip.ReshowDelay = 200
+
+# --- Top row: source mode + profile + path toggle + help -------------------
+$lblMode = New-Object Windows.Forms.Label
+$lblMode.Text = 'Source:'; $lblMode.AutoSize = $true
+$lblMode.Location = New-Object Drawing.Point(12,15)
+$form.Controls.Add($lblMode)
+
+$cmbMode = New-Object Windows.Forms.ComboBox
+$cmbMode.DropDownStyle = 'DropDownList'
+$cmbMode.Location = New-Object Drawing.Point(66,12)
+$cmbMode.Size = New-Object Drawing.Size(160,24)
+[void]$cmbMode.Items.Add('Skyrim')
+if ($script:HasMO) { [void]$cmbMode.Items.Add('Mod Organizer') }
+$cmbMode.SelectedItem = if ($cmbMode.Items.Contains($script:CurrentMode)) { $script:CurrentMode } else { 'Skyrim' }
+$form.Controls.Add($cmbMode)
+$tip.SetToolTip($cmbMode, "Skyrim = read the game's real Data folder (physical install)." + [Environment]::NewLine +
+    "Mod Organizer = read a MO2 profile's mod priority + overwrite folder.")
+
+$lblProfile = New-Object Windows.Forms.Label
+$lblProfile.Text = 'Profile:'; $lblProfile.AutoSize = $true
+$lblProfile.Location = New-Object Drawing.Point(240,15)
+$form.Controls.Add($lblProfile)
+
+$cmbProfile = New-Object Windows.Forms.ComboBox
+$cmbProfile.DropDownStyle = 'DropDownList'
+$cmbProfile.Location = New-Object Drawing.Point(292,12)
+$cmbProfile.Size = New-Object Drawing.Size(220,24)
+foreach ($p in $script:Profiles) { [void]$cmbProfile.Items.Add($p) }
+if ($script:ProfileName -and $cmbProfile.Items.Contains($script:ProfileName)) { $cmbProfile.SelectedItem = $script:ProfileName }
+elseif ($cmbProfile.Items.Count -gt 0) { $cmbProfile.SelectedIndex = 0 }
+$form.Controls.Add($cmbProfile)
+$tip.SetToolTip($cmbProfile, 'Which MO2 profile to read (Mod Organizer mode only).')
+
+$chkFull = New-Object Windows.Forms.CheckBox
+$chkFull.Text = 'Show full paths'; $chkFull.AutoSize = $true
+$chkFull.Location = New-Object Drawing.Point(530,14)
+$form.Controls.Add($chkFull)
+$tip.SetToolTip($chkFull, 'Off = short relative paths (mods\, overwrite\, game\). On = complete file paths.')
+
+$btnHelp = New-Object Windows.Forms.Button
+$btnHelp.Text = '?  Help'
+$btnHelp.Location = New-Object Drawing.Point(1055,11)
+$btnHelp.Size = New-Object Drawing.Size(97,26)
+$btnHelp.Anchor = 'Top,Right'
+$form.Controls.Add($btnHelp)
+$tip.SetToolTip($btnHelp, 'Click for a step-by-step explanation of how to use this tester.')
+
+# --- Status line -----------------------------------------------------------
 $warning = New-Object Windows.Forms.Label
-$warning.Text = if ($script:ModsRoot) {
-    "Direct MO2 mode - profile: $($script:ProfileName). Close Skyrim before writing files."
-} else {
-    "Physical game-folder mode. Close Skyrim before writing files. Root: $script:GameRoot"
-}
 $warning.ForeColor = [Drawing.Color]::DarkRed
 $warning.AutoSize = $true
-$warning.Location = New-Object Drawing.Point(12,12)
+$warning.Location = New-Object Drawing.Point(12,46)
 $form.Controls.Add($warning)
 
-$buttons = @()
-function Add-Button($text, $x, $width, $handler) {
+function Update-StatusLabel {
+    if ($script:CurrentMode -eq 'Mod Organizer') {
+        $warning.Text = "Mod Organizer mode - profile: $($script:CurrentProfile). Close Skyrim before writing files."
+    } else {
+        $warning.Text = "Skyrim mode - reading $($script:GameRoot). Close Skyrim before writing files."
+    }
+}
+
+# --- Buttons ---------------------------------------------------------------
+$script:ButtonY = 74
+$script:buttons = @()
+function Add-Button($text, $x, $width, $help, $handler) {
     $b = New-Object Windows.Forms.Button
-    $b.Text = $text; $b.Location = New-Object Drawing.Point($x,40)
+    $b.Text = $text; $b.Location = New-Object Drawing.Point($x,$script:ButtonY)
     $b.Size = New-Object Drawing.Size($width,34)
     $b.Add_Click($handler); $form.Controls.Add($b); $script:buttons += $b
+    $tip.SetToolTip($b, $help)
 }
 
 $list = New-Object Windows.Forms.ListView
-$list.Location = New-Object Drawing.Point(12,86)
-$list.Size = New-Object Drawing.Size(1140,610)
+$list.Location = New-Object Drawing.Point(12,120)
+$list.Size = New-Object Drawing.Size(1140,620)
 $list.Anchor = 'Top,Bottom,Left,Right'
 $list.View = 'Details'; $list.FullRowSelect = $true; $list.GridLines = $true
 [void]$list.Columns.Add('Mod',190); [void]$list.Columns.Add('Setting',205)
@@ -395,6 +497,7 @@ $list.View = 'Details'; $list.FullRowSelect = $true; $list.GridLines = $true
 $form.Controls.Add($list)
 
 function Show-Results($mode) {
+    $script:LastMode = $mode
     $list.Items.Clear()
     $custom = if ($mode -eq 'custom') { Load-ExpectedCustom } else { $null }
     if ($mode -eq 'custom' -and $null -eq $custom) { throw 'No randomized expected-values file exists. Run Snapshot + Randomize first.' }
@@ -410,7 +513,8 @@ function Show-Results($mode) {
         $item = New-Object Windows.Forms.ListViewItem($spec.Mod)
         [void]$item.SubItems.Add($spec.Setting); [void]$item.SubItems.Add((Display-Value $spec $current))
         [void]$item.SubItems.Add((Display-Value $spec $expected)); [void]$item.SubItems.Add($result)
-        [void]$item.SubItems.Add($(if($path){$path}else{''}))
+        [void]$item.SubItems.Add((Display-Path $path))
+        $item.Tag = $path
         if ($result -eq 'PASS') { $item.BackColor = [Drawing.Color]::PaleGreen }
         elseif ($result -eq 'FAIL') { $item.BackColor = [Drawing.Color]::MistyRose }
         elseif ($result -eq 'N/A') { $item.ForeColor = [Drawing.Color]::Gray }
@@ -418,7 +522,8 @@ function Show-Results($mode) {
     }
     $lines = [Collections.Generic.List[string]]::new()
     $lines.Add("Risa Hotkey Restore Tester")
-    $lines.Add("Profile: $($script:ProfileName)")
+    $lines.Add("Source: $($script:CurrentMode)")
+    if ($script:CurrentMode -eq 'Mod Organizer') { $lines.Add("Profile: $($script:CurrentProfile)") }
     $lines.Add("Mode: $mode")
     $lines.Add("Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')")
     $lines.Add('')
@@ -431,10 +536,14 @@ function Show-Results($mode) {
     [IO.File]::WriteAllText($script:LastResultsPath, $script:LastReport, [Text.UTF8Encoding]::new($false))
 }
 
-Add-Button 'Read Current Values' 12 165 {
+function Refresh-View {
+    try { Show-Results $script:LastMode } catch { [Windows.Forms.MessageBox]::Show($_.Exception.Message,'Tester error') }
+}
+
+Add-Button 'Read Current Values' 12 165 'Show the value currently in each managed config file. Read-only - changes nothing.' {
     try { Show-Results 'current' } catch { [Windows.Forms.MessageBox]::Show($_.Exception.Message,'Tester error') }
 }
-Add-Button 'Snapshot + Randomize' 185 175 {
+Add-Button 'Snapshot + Randomize' 185 175 'Back up every managed file, then set each setting to a random test value. Do this BEFORE launching Skyrim. Close Skyrim first.' {
     try {
         Assert-SkyrimClosed
         $answer = [Windows.Forms.MessageBox]::Show('Create a complete safety snapshot and randomize every installed managed setting?','Confirm test setup','YesNo','Warning')
@@ -445,13 +554,13 @@ Add-Button 'Snapshot + Randomize' 185 175 {
         [Windows.Forms.MessageBox]::Show("Randomized successfully.`nSafety snapshot: $dir",'Ready for Skyrim')
     } catch { [Windows.Forms.MessageBox]::Show($_.Exception.Message,'Randomize failed') }
 }
-Add-Button 'Verify Custom Restore' 368 175 {
+Add-Button 'Verify Custom Restore' 368 175 "After Risa's 'Restore My Original Settings' in-game: every present setting should match the randomized value (green PASS)." {
     try { Show-Results 'custom' } catch { [Windows.Forms.MessageBox]::Show($_.Exception.Message,'Verification error') }
 }
-Add-Button 'Verify Supported Defaults' 551 195 {
+Add-Button 'Verify Supported Defaults' 551 195 "After Risa's 'Restore Supported Mod Defaults' in-game: every present setting should match the mod's default (green PASS)." {
     try { Show-Results 'defaults' } catch { [Windows.Forms.MessageBox]::Show($_.Exception.Message,'Verification error') }
 }
-Add-Button 'Restore Safety Snapshot' 754 185 {
+Add-Button 'Restore Safety Snapshot' 754 185 'Put every managed file back exactly as it was at the last snapshot. Close Skyrim first.' {
     try {
         Assert-SkyrimClosed
         $answer = [Windows.Forms.MessageBox]::Show('Restore every complete config file from the latest safety snapshot?','Confirm safety restore','YesNo','Warning')
@@ -460,7 +569,7 @@ Add-Button 'Restore Safety Snapshot' 754 185 {
     }
     catch { [Windows.Forms.MessageBox]::Show($_.Exception.Message,'Snapshot restore failed') }
 }
-Add-Button 'Copy Results' 947 140 {
+Add-Button 'Copy Results' 947 140 'Copy the current table to the clipboard and save it to TesterData\LastResults.txt.' {
     try {
         if ([string]::IsNullOrWhiteSpace($script:LastReport)) { Show-Results 'current' }
         [Windows.Forms.Clipboard]::SetText($script:LastReport)
@@ -468,9 +577,60 @@ Add-Button 'Copy Results' 947 140 {
     } catch { [Windows.Forms.MessageBox]::Show($_.Exception.Message,'Copy failed') }
 }
 
-if (-not $script:ModsRoot -and -not (Test-Path -LiteralPath (Join-Path $script:GameRoot 'SkyrimSE.exe'))) {
+# --- Top-control behaviour -------------------------------------------------
+function Sync-ProfileEnabled {
+    $cmbProfile.Enabled = ($cmbMode.SelectedItem -eq 'Mod Organizer') -and ($cmbProfile.Items.Count -gt 0)
+}
+
+$cmbMode.Add_SelectedIndexChanged({
+    Set-SourceMode $cmbMode.SelectedItem $cmbProfile.SelectedItem
+    Sync-ProfileEnabled
+    Update-StatusLabel
+    Refresh-View
+})
+$cmbProfile.Add_SelectedIndexChanged({
+    if ($cmbMode.SelectedItem -eq 'Mod Organizer') {
+        Set-SourceMode 'Mod Organizer' $cmbProfile.SelectedItem
+        Update-StatusLabel
+        Refresh-View
+    }
+})
+$chkFull.Add_CheckedChanged({
+    $script:ShowFullPath = $chkFull.Checked
+    Refresh-View
+})
+$btnHelp.Add_Click({
+    $msg = @"
+HOW TO USE THIS TESTER
+
+Source (top-left):
+  - Skyrim: reads the game's real Data folder.
+  - Mod Organizer: reads a MO2 profile's mods + overwrite. Pick the profile beside it.
+
+Test that Risa restores YOUR custom keys:
+  1. Click 'Snapshot + Randomize' (before launching Skyrim).
+  2. Launch Skyrim, let Risa manage hotkeys, choose 'Restore My Original Settings', exit.
+  3. Click 'Verify Custom Restore'. Every present row should be green PASS.
+
+Test that Risa restores the mods' DEFAULT keys:
+  1. Click 'Snapshot + Randomize'.
+  2. Launch Skyrim, choose 'Restore Supported Mod Defaults', exit.
+  3. Click 'Verify Supported Defaults'. Every present row should be green PASS.
+
+Safety:
+  - 'Restore Safety Snapshot' puts every file back exactly as it was at the last snapshot.
+  - Always close Skyrim before any button that writes files.
+
+Tip: hover any button for a one-line reminder. Toggle 'Show full paths' for complete paths.
+"@
+    [Windows.Forms.MessageBox]::Show($msg,'Risa Hotkey Tester - Help')
+})
+
+if (-not $script:MORoot -and -not (Test-Path -LiteralPath (Join-Path $script:GameRoot 'SkyrimSE.exe'))) {
     [Windows.Forms.MessageBox]::Show("SkyrimSE.exe was not found in the Start In folder.`nSet this executable's Start In path to the Skyrim game folder in MO2.",'Incorrect working folder','OK','Warning') | Out-Null
 }
 
+Sync-ProfileEnabled
+Update-StatusLabel
 Show-Results 'current'
 [void]$form.ShowDialog()
