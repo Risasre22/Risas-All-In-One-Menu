@@ -1,8 +1,8 @@
 # Risa's All In One Menu
 
-Risa's All In One Menu is an SKSE plugin that provides one launcher for commonly used mod menus. It blocks supported menu hotkeys by default, freeing those keys for other gameplay mods, while still allowing every menu to be opened from the launcher.
+Risa's All In One Menu is an SKSE plugin that places supported mod menus behind one configurable launcher. It manages their native hotkeys so those keys can be reused for gameplay, while each original menu remains available through the launcher or an optional user-defined shortcut.
 
-Press **F1** to open the launcher. Press **F1** again or **Escape** to close it.
+Press **F1** by default to open or close the launcher. **Escape** also closes it.
 
 ## Supported Menus
 
@@ -10,47 +10,31 @@ Press **F1** to open the launcher. Press **F1** again or **Escape** to close it.
 - Open Animation Replacer
 - Immersive Equipment Displays
 - Debug Menu
-- dMenu
+- dMenu and dMenu NG
 - Improved Camera SE
 - ENB Editor
-- Community Shaders
-- ReShade
 - FLICK
 - KreatE
-- CatMenu
+- Community Shaders
+- Skyrim Party Sheet
 - Dragonborn's Toolkit
+- CatMenu
+- ReShade
 
-Only installed integrations are shown.
+Only integrations detected in the current installation are displayed.
 
 ## Features
 
-- One launcher for every supported menu, opened from a single hotkey
-- Configurable launcher hotkey with optional modifiers (Ctrl/Shift/Alt), double-tap, and an "Easy Close" mode (single key press closes an open menu)
-- Rebindable hotkeys per mod: open Settings, click any mod's key, and press a new one. Your choices are saved and carry over through updates and new games
-- Per-mod toggle to allow a mod's original hotkey, or leave it freed for other gameplay mods
-- Conflict warning that flags when a mod's key matches the launcher key or another enabled mod, and auto-disables a mod set to the launcher key
-- Settings organized into collapsible, categorized sections (Menus & Tools, Animation & Gear, Visual and Lighting)
-- Drag-and-drop launcher button ordering
-- Scalable UI with saved size and position
-- Direct FLICK integration through its public API
-- Runtime hotkey interception scoped to supported mods where possible
-- Maintenance section with a "Restore Hotkeys for Uninstall" button and an optional logging toggle (off by default)
-
-## Transparency and Safety
-
-This project was developed with AI assistance and tested iteratively in Skyrim. Its source is published so users and mod authors can inspect exactly what it does.
-
-The plugin:
-
-- Contains no networking or telemetry code
-- Logging is off by default; when enabled it stays local and excludes usernames, full local paths, save names, and unrelated mod lists
-- Does not download or execute external files
-- Does not contain Papyrus scripts
-- Writes its own settings file
-- Reads supported mods' hotkey configuration files, and writes to them to relocate each mod's hotkey to an unused key so the original key is freed for other mods. Every such change is reversible from Settings → Maintenance → Restore Hotkeys for Uninstall
-- Uses MinHook for targeted input interception inside the Skyrim process
-
-The `1` prefix in `1RisaAllInOneMenu.dll` is intentional. It allows the startup collision adjustment to run before Debug Menu reads its hotkey. Do not rename the DLL.
+- One launcher for supported SKSE and overlay menus
+- Configurable launcher key with Ctrl, Shift, Alt, double-tap, and Easy Close options
+- Rebindable per-menu shortcuts saved across updates and new games
+- Optional access to each menu's original shortcut
+- Duplicate-key and launcher-key conflict detection
+- Dedicated Community Shaders and Skyrim Party Sheet submenus
+- Drag-and-drop button ordering, adjustable UI scale, and saved window placement
+- Official APIs where available, with guarded compatibility integrations elsewhere
+- Local diagnostic logging, disabled by default
+- Restoration of captured original settings or supported defaults before uninstalling
 
 ## Requirements
 
@@ -60,10 +44,26 @@ The `1` prefix in `1RisaAllInOneMenu.dll` is intentional. It allows the startup 
 
 The supported menu mods themselves are optional.
 
-## Installing, Updating, and Uninstalling
+## Installation
 
-- **After installing or updating:** launch and exit the game once before playing so the plugin can apply its hotkey relocations. Some supported mods read their configuration before this plugin loads, so the changes take effect on the next launch.
-- **Before uninstalling:** open the launcher, go to **Settings → Maintenance → Restore Hotkeys for Uninstall**, then restart once. This reverts every supported mod's hotkey to its original value. If you remove the plugin without doing this, those mods keep their relocated keys.
+Install the release archive with a mod manager. Some supported mods create their configuration files only after they have run once.
+
+When Risa changes a managed configuration file, a translucent ten-second notification appears at startup. Restart Skyrim once before playing so every affected mod reads its updated setting.
+
+## Updating
+
+Replace the previous version normally. User settings are stored separately from the DLL and are retained across updates.
+
+## Uninstallation
+
+Before removing the mod:
+
+1. Open **Settings > Maintenance**.
+2. Select **Restore My Original Settings** to restore captured user values, or **Restore Supported Mod Defaults** to restore standard defaults.
+3. Exit Skyrim.
+4. Disable or remove Risa's All In One Menu before launching Skyrim again.
+
+Removing the plugin without restoring first can leave supported mods assigned to Risa's managed internal keys.
 
 ## Building
 
@@ -74,27 +74,48 @@ Requirements:
 - Git
 - [vcpkg](https://github.com/microsoft/vcpkg)
 
-Set the `VCPKG_ROOT` environment variable to your vcpkg installation, then run:
+Set `VCPKG_ROOT` to your vcpkg installation, then configure and build from the repository root:
 
 ```powershell
-cmake -S SKSE_Plugin -B SKSE_Plugin/build -G "Visual Studio 17 2022" -A x64 -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows-static-md
-cmake --build SKSE_Plugin/build --config Release
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64 `
+  -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
+  -DVCPKG_TARGET_TRIPLET=x64-windows-static-md
+
+cmake --build build --config Release
 ```
 
-The DLL is written to `SKSE/Plugins/1RisaAllInOneMenu.dll`.
+The default output is `build/Release/1RisaAllInOneMenu.dll`.
 
-Windows users can alternatively run `SKSE_Plugin/build.bat` after setting `VCPKG_ROOT`.
+To deploy automatically to a local test installation, add an explicit cache value during configuration:
+
+```powershell
+-DRISA_DEPLOY_DIR="C:/Path/To/Your/Mod/SKSE/Plugins"
+```
+
+Windows users can alternatively run `build.bat` after setting `VCPKG_ROOT`.
+
+## Privacy and Safety
+
+- No networking or telemetry
+- No downloading or execution of external files
+- No Papyrus scripts
+- Diagnostic logging is local and disabled by default
+- Configuration writes are limited to hotkey settings used by supported menu integrations
+- Managed hotkey changes can be restored from the in-game Maintenance section
+
+The project was developed with AI assistance and tested iteratively in Skyrim. Its source is public so users and mod authors can inspect the implementation.
+
+The `1` prefix in `1RisaAllInOneMenu.dll` is intentional and must not be removed.
 
 ## Reporting Issues
 
-Logging is off by default. To capture a log, enable **Settings → Maintenance → Enable logging**, reproduce the issue, then include:
+Enable **Settings > Maintenance > Enable logging**, reproduce the problem, and include:
 
-- `RisaAllInOneMenu.log` (in `Documents/My Games/Skyrim Special Edition/SKSE/`)
-- Skyrim runtime version
-- SKSE version
-- Affected menu mod and version
-- Exact key presses or button sequence used to reproduce the issue
+- `RisaAllInOneMenu.log` from `Documents/My Games/Skyrim Special Edition/SKSE/`
+- Skyrim runtime and SKSE versions
+- The affected menu mod and its version
+- The exact button and key sequence used
 
 ## License
 
-Original project code is available under the [MIT License](LICENSE). Third-party components and API headers retain their own licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Original project code is available under the [MIT License](LICENSE). Third-party headers and components retain their own licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

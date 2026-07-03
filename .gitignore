@@ -7,9 +7,12 @@ vcpkg/
 *.exp
 *.pdb
 
-# Release archives (kept locally under releases/, not committed)
+# Release archives
 *.7z
 releases/
+
+# Local documentation, tools, generated sites, and archived releases
+Other/
 
 # Local editor and agent state
 .agents/
@@ -21,13 +24,5 @@ releases/
 Thumbs.db
 .DS_Store
 
-# Local-only dev tooling (kept out of the repo/release)
-tools/Helper plugin*/
-tools/input_test_helper.cpp
-docs/INPUT_TEST_HELPER.md
-
-# Hotkey tester runtime state (snapshots, expected values, results)
-tools/Risa Hotkey Tester/TesterData/
-
-# MkDocs build output (the site is built and published by GitHub Actions)
+# Generated MkDocs output
 site/

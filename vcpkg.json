@@ -1,11 +1,10 @@
 {
   "name": "risaallinonemenu",
-  "version": "1.2.1",
+  "version": "1.5.3",
   "dependencies": [
     "fmt",
     "spdlog",
     "rapidcsv",
-    "catch2",
     "minhook",
     "nlohmann-json"
   ]

@@ -64,39 +64,21 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
     OUTPUT_NAME "1RisaAllInOneMenu"
 )
 
-# The project now lives outside the MO2 mod, so the built DLL is copied into the mod's
-# SKSE/Plugins folder for in-game testing via this deploy path. Defaults to the current MO2
-# location; override with -DRISA_DEPLOY_DIR=... (e.g. on another PC or if the mod folder moves).
-set(RISA_DEPLOY_DIR "F:/Games/Steam/steamapps/common/Mod Organizer/mods/Risa's All In One Menu/SKSE/Plugins"
-    CACHE PATH "Folder the built plugin DLL is copied into for testing (MO2 mod SKSE/Plugins).")
-set(OUTPUT_DIR "${RISA_DEPLOY_DIR}")
-set_target_properties(${PROJECT_NAME} PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY_RELEASE        "${OUTPUT_DIR}"
-    RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${OUTPUT_DIR}"
-    RUNTIME_OUTPUT_DIRECTORY_DEBUG          "${OUTPUT_DIR}"
-    LIBRARY_OUTPUT_DIRECTORY_RELEASE        "${OUTPUT_DIR}"
-    LIBRARY_OUTPUT_DIRECTORY_RELWITHDEBINFO "${OUTPUT_DIR}"
-    LIBRARY_OUTPUT_DIRECTORY_DEBUG          "${OUTPUT_DIR}"
-)
+# Optional local deployment. Clean builds remain under build/<config> unless this cache
+# variable is explicitly provided by the developer.
+set(RISA_DEPLOY_DIR "" CACHE PATH "Optional SKSE/Plugins directory for automatic DLL deployment.")
+if(RISA_DEPLOY_DIR)
+    set_target_properties(${PROJECT_NAME} PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY_RELEASE        "${RISA_DEPLOY_DIR}"
+        RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${RISA_DEPLOY_DIR}"
+        RUNTIME_OUTPUT_DIRECTORY_DEBUG          "${RISA_DEPLOY_DIR}"
+        LIBRARY_OUTPUT_DIRECTORY_RELEASE        "${RISA_DEPLOY_DIR}"
+        LIBRARY_OUTPUT_DIRECTORY_RELWITHDEBINFO "${RISA_DEPLOY_DIR}"
+        LIBRARY_OUTPUT_DIRECTORY_DEBUG          "${RISA_DEPLOY_DIR}"
+    )
 
-# Remove the pre-prefix filename so SKSE never loads two copies of the plugin.
-add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E rm -f "${OUTPUT_DIR}/RisaAllInOneMenu.dll"
-)
-
-# Optional local-only debug tool: RisaInputTestHelper (reports whether keys are seen by a generic
-# consumer). Off by default; enable with -DBUILD_INPUT_TEST_HELPER=ON. Deploys next to the main DLL.
-option(BUILD_INPUT_TEST_HELPER "Build the debug input test helper plugin" OFF)
-if(BUILD_INPUT_TEST_HELPER)
-    add_library(RisaInputTestHelper SHARED tools/input_test_helper.cpp)
-    target_include_directories(RisaInputTestHelper PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
-    target_link_libraries(RisaInputTestHelper PRIVATE
-        CommonLibSSE::CommonLibSSE fmt::fmt spdlog::spdlog)
-    set_target_properties(RisaInputTestHelper PROPERTIES
-        PREFIX ""
-        RUNTIME_OUTPUT_DIRECTORY_RELEASE        "${OUTPUT_DIR}"
-        RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${OUTPUT_DIR}"
-        LIBRARY_OUTPUT_DIRECTORY_RELEASE        "${OUTPUT_DIR}"
-        LIBRARY_OUTPUT_DIRECTORY_RELWITHDEBINFO "${OUTPUT_DIR}"
+    # Remove the old non-prefixed filename so SKSE cannot load two copies.
+    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E rm -f "${RISA_DEPLOY_DIR}/RisaAllInOneMenu.dll"
     )
 endif()
