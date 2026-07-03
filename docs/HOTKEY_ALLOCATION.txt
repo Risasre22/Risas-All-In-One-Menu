@@ -1,5 +1,5 @@
 RISA'S ALL IN ONE MENU - INTEGRATION AND HIDDEN KEY LEDGER
-Last updated: 2026-07-01
+Last updated: 2026-07-02
 
 
 PURPOSE
@@ -35,7 +35,7 @@ API OUTREACH PRIORITIES
 Priority  Mod                       Last known update     Current limitation
 --------  ------------------------  -----------------  -----------------------------------------
 HIGH      Community Shaders           RECENT           Uses F15, F19, F23, and F24.
-MEDIUM    dMenu NG                  RECENT         API integrated; F14 stays parked to free Home.
+DONE      dMenu NG                    RECENT         v2 API (hotkey control) added by us; Home freed live, no key parked.
 HIGH      KreatE                      RECENT          Uses F18. Author contacted.
 MEDIUM   Open Animation Replacer     RECENT           Opens internally, but F13 stays parked.
 MEDIUM   Debug Menu                RECENT          Still driven through its managed key.
@@ -51,7 +51,8 @@ KEY AVAILABILITY
 Key   Status      Owner / reason
 ---   ------      ------------------------------------------------------------
 F13   RESERVED    OAR native listener remains parked here.
-F14   RESERVED    dMenu native listener parked here (opened via dMenu NG API; park frees Home).
+F14   FALLBACK    Stock dMenu (no v2 API) is parked here; with dMenu NG v2 the key is disabled live
+                  via SetToggleKeyMkb(0) and Home stays completely free (nothing parked).
 F15   RESERVED    Community Shaders Editor listener.
 F16   RESERVED    IED parked here (OverrideToggleKeys=true); launcher opens it via native render task.
 F17   FREE        No current owner.
@@ -64,8 +65,9 @@ F23   RESERVED    Community Shaders Overlay listener.
 F24   RESERVED    Community Shaders Effect listener.
 
 Immediately reusable: F17, F20, F21
-Conditionally available: F22 if ReShade's non-add-on fallback is removed
-Unavailable: F13, F14, F15, F16, F18, F19, F22, F23, F24
+Conditionally available: F14 whenever dMenu NG v2 is in use (stock dMenu still needs it);
+                         F22 if ReShade's non-add-on fallback is removed
+Unavailable: F13, F15, F16, F18, F19, F23, F24
 
 
 KEYLESS INTEGRATIONS
@@ -74,12 +76,13 @@ KEYLESS INTEGRATIONS
 Mod                         Method     Notes
 --------------------------  ---------  --------------------------------------------------------
 SKSE Menu Framework         API        Framework window API; native ToggleMode disabled.
+dMenu NG (v2)               API        Open/close/toggle + live SetToggleKeyMkb(0) frees Home; no key parked.
 FLICK                       API        Official RequestFUCK API; native key disabled.
 ReShade add-on              API        ReShade add-on API; native overlay key disabled.
-Improved Camera Discord     COMMAND    Verified registered `ic menu` handler; Escape closes.
-Improved Camera public      INTERNAL   Verified live UIMenu open/close functions.
-IED 1.7.5b                  INTERNAL   Native render-task open, close, and state query.
-Dragonborn's Toolkit        INTERNAL   Internal SetMenuOpen(bool); native key disabled.
+Improved Camera             COMMAND    `ic menu` opens; Risa closes via simulated ESC. Shift+Home freed
+                                       caller-scoped (blocked only from IC), so it stays free for others.
+IED 1.7.5b                  INTERNAL   Native render-task open; simulated ESC close; parked on F16 (see above).
+Dragonborn's Toolkit        API        Official IVDBTK1 Open/Close/IsOpen; native key disabled.
 CatMenu                     INTERNAL   Direct UI state; native listener intercepted.
 Skyrim Party Sheet          SINK       No hidden keys; Inspect Card uses a guarded native adapter.
 
@@ -92,12 +95,14 @@ Open Animation Replacer
   F13 remains reserved because OAR's native listener is still parked there.
   Never set OAR's key to 0: OAR interprets scan code 0 as the left mouse button.
 
-dMenu NG
-  Method: dMenu NG external-control API (SKSE message 0x444D4946 "DMIF" from sender "dmenu", with
-    a dMenu_GetInterface() export fallback). Open / close / toggle / is-open go straight through
-    the API -- no key simulation and a real menu-state query, so no more open/close desync.
-  F14 remains reserved because dMenu's native listener is still parked there to free Home.
-  Stock dMenu (no API) falls back to the F14 engine-injection path automatically (HasDMenuApi gate).
+dMenu NG (v2) -- now keyless (moved to KEYLESS INTEGRATIONS above)
+  Method: dMenu NG external-control API v2 (SKSE message 0x444D4946 "DMIF" from sender "dmenu", with
+    a dMenu_GetInterface() export fallback). Open / close / toggle / is-open go through the API, and
+    v2 adds SetToggleKeyMkb(0), which disables dMenu's Home key live (no ini edit, no restart) -- so
+    Home stays completely FREE and nothing is parked. Gated on HasDMenuV2Api().
+  Stock dMenu / dMenu NG without v2: fall back to the F14 ini relocation + engine-injection path, and
+    Risa closes them on ESC via the API/key since only the v2 "Risa's dmenu" build self-closes on ESC.
+  The v2 API was authored by us (Risasre22) as dMenu NG's first collaborator; branch risa/hotkey-api.
 
 
 HOTKEY-DEPENDENT INTEGRATIONS
@@ -111,6 +116,22 @@ Community Shaders         F15, F19, F23, F24    Four separate menu actions.
 Debug Menu                F3                     Managed key outside the hidden-key pool.
 ENB Editor                Shift+Enter            Native chord; caller-scoped management.
 ReShade non-add-on        F22                    Compatibility fallback only.
+
+
+ESC-CLOSE BEHAVIOR (2026-07-02)
+-------------------------------
+
+F1 opens/closes the launcher; ESC closes the active mod menu. A physical-ESC handler
+(HookedKbProcess, read at OS level) drives this:
+
+  Self-close on ESC (handler just clears our state):  OAR, FLICK, Party Sheet, SKSE MF, IED,
+     Improved Camera, and the v2 "Risa's dmenu" build.
+  Closed explicitly by us on ESC:  Debug Menu, ENB, KreatE, Dragonborn, CatMenu (EscBlockedForActiveMenu),
+     plus dMenu (stock / dMenu NG without v2 self-close) via its API/key.
+
+EscBlockedForActiveMenu strips ESC from the game while Debug/ENB/KreatE/Dragonborn/CatMenu are open
+so Skyrim's journal/pause menu can't pop. dMenu is NOT in that set (it blocks the game's input itself
+while open). IC reads its chord via user32 and is blocked caller-scoped, so its ESC still reaches it.
 
 
 MODIFIER CHORDS

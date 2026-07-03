@@ -8,7 +8,7 @@ endif()
 
 set(VCPKG_TARGET_TRIPLET "x64-windows-static-md" CACHE STRING "vcpkg target triplet")
 
-project(RisaAllInOneMenu VERSION 1.4.0 LANGUAGES CXX)
+project(RisaAllInOneMenu VERSION 1.5.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -83,4 +83,21 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
 add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E rm -f "${OUTPUT_DIR}/RisaAllInOneMenu.dll"
 )
+
+# Optional local-only debug tool: RisaInputTestHelper (reports whether keys are seen by a generic
+# consumer). Off by default; enable with -DBUILD_INPUT_TEST_HELPER=ON. Deploys next to the main DLL.
+option(BUILD_INPUT_TEST_HELPER "Build the debug input test helper plugin" OFF)
+if(BUILD_INPUT_TEST_HELPER)
+    add_library(RisaInputTestHelper SHARED tools/input_test_helper.cpp)
+    target_include_directories(RisaInputTestHelper PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+    target_link_libraries(RisaInputTestHelper PRIVATE
+        CommonLibSSE::CommonLibSSE fmt::fmt spdlog::spdlog)
+    set_target_properties(RisaInputTestHelper PROPERTIES
+        PREFIX ""
+        RUNTIME_OUTPUT_DIRECTORY_RELEASE        "${OUTPUT_DIR}"
+        RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${OUTPUT_DIR}"
+        LIBRARY_OUTPUT_DIRECTORY_RELEASE        "${OUTPUT_DIR}"
+        LIBRARY_OUTPUT_DIRECTORY_RELWITHDEBINFO "${OUTPUT_DIR}"
+    )
+endif()
 

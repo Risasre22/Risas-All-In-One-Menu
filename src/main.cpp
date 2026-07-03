@@ -53,6 +53,7 @@
 #include <cstring>
 #include <initializer_list>
 #include "dmenu_api.h"
+#include "DragonbornsToolkitAPI.h"
 
 // ============================================================================
 // dMenu NG external-control API (optional).
@@ -68,6 +69,15 @@ static bool HasDMenuApi() {
     return api && api->IsMenuOpen && api->OpenMenu && api->CloseMenu;
 }
 
+// v2 adds live control of dMenu's keyboard toggle key. Gate on interfaceVersion FIRST (short-circuit)
+// and structSize so we never read the v2 members off a smaller v1 interface.
+static bool HasDMenuV2Api() {
+    const auto* api = g_DMenuApi.load();
+    return api && api->interfaceVersion >= 2 &&
+           api->structSize >= sizeof(dmenu_api::Interface) &&
+           api->GetToggleKeyMkb && api->SetToggleKeyMkb;
+}
+
 // Grab the interface straight from dmenu.dll's export, in case the SKSE broadcast was missed.
 static void AcquireDMenuApiFromExport() {
     if (g_DMenuApi.load()) return;
@@ -75,7 +85,9 @@ static void AcquireDMenuApiFromExport() {
     if (!h) return;
     auto fn = reinterpret_cast<dmenu_api::GetInterfaceFn>(::GetProcAddress(h, "dMenu_GetInterface"));
     if (!fn) return;
-    if (const auto* iface = fn(dmenu_api::kInterfaceVersion); iface && iface->interfaceVersion >= 1) {
+    // Request version 0 ("give me whatever you have"): a stock/older dMenu rejects a request for a
+    // version higher than its own, so asking for our kInterfaceVersion would return null on v1 dMenu.
+    if (const auto* iface = fn(0); iface && iface->interfaceVersion >= 1) {
         g_DMenuApi.store(iface);
         SKSE::log::info("dMenu API acquired via dmenu.dll export (interface v{}).", iface->interfaceVersion);
     }
@@ -90,7 +102,7 @@ static void DMenuApiMessageHandler(SKSE::MessagingInterface::Message* msg) {
     SKSE::log::info("dMenu API received via SKSE message (interface v{}).", iface->interfaceVersion);
 }
 
-static constexpr std::string_view kRisaMenuVersion = "1.4.0";
+static constexpr std::string_view kRisaMenuVersion = "1.5.0";
 static std::string g_RuntimeVersion = "Unknown";
 static std::string g_SKSEVersion = "Unknown";
 static std::string g_RuntimeEdition = "Unknown";
@@ -567,6 +579,23 @@ static bool IsUserTyping() {
 }
 
 static SKSEMenuFramework::Model::WindowInterface* g_LauncherWindow = nullptr;
+static std::atomic<bool> g_ConfigRestartRequired{ false };
+static std::atomic<long long> g_RestartNoticeStartedMs{ 0 };
+
+static long long RestartNoticeNowMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+static void MarkConfigRestartRequired(const char* source) {
+    const bool first = !g_ConfigRestartRequired.exchange(true);
+    SKSE::log::info("Configuration changed: {}. Skyrim restart notice {}.",
+        source, first ? "armed" : "already armed");
+    if (g_LauncherWindow) {
+        g_LauncherWindow->IsOpen.store(true);
+        g_LauncherWindow->BlockUserInput.store(false);
+    }
+}
 
 static bool IsExternalMenuOpen() {
     if (g_LauncherWindow && g_LauncherWindow->IsOpen.load()) {
@@ -1478,6 +1507,23 @@ static std::atomic<long long> g_AllowCSOpenUntilMs{ 0 };
 static std::array<std::atomic<int>, 4> g_CSKeyPassCount{}; // main, editor, overlay, effect
 static std::atomic<bool> g_AllowESCSinkBlock{ false };
 
+// These menus ignore ESC (they don't close on it) and let ESC fall through to the game, which pops
+// Skyrim's journal/pause menu. While one of them is the active menu we strip ESC from the game's
+// input reads so that can't happen; our physical-ESC handler (which reads the key at OS level, so
+// it's unaffected by this strip) still sees ESC and closes the menu through its own path.
+static bool EscBlockedForActiveMenu() {
+    switch (g_ActiveMenu.load()) {
+    case ActiveMenu::DebugMenu:
+    case ActiveMenu::ENB:
+    case ActiveMenu::KreatE:
+    case ActiveMenu::Dragonborn:
+    case ActiveMenu::CatMenu:
+        return true;
+    default:
+        return false;
+    }
+}
+
 // After a mod is opened from a launcher button it can take up to ~1s to actually appear.
 // Pressing the launcher key during that window desyncs our open/closed tracking (we'd
 // "close" a menu that hasn't finished opening). Ignore the launcher key until this time.
@@ -1521,6 +1567,7 @@ static void AddScanInput(INPUT& input, WORD scanCode, bool keyUp);
 static void CloseLauncher(bool external = false);
 static void ForceCloseSKSEMenuFramework();
 static void ToggleLauncher();
+static void SyncDMenuKeyViaApi();
 static void SimulateModifiedKey(WORD modifierDIK, WORD keyDIK);
 static void PostKeyToGameWindow(WORD vk);
 static void TryHookModSinks();
@@ -1539,6 +1586,7 @@ static void OpenDMenu();
 static void OpenImprovedCamera();
 static bool SetImprovedCameraOpen(bool open);
 static bool IsImprovedCameraOpen();
+static bool ToggleImprovedCameraWithRegisteredCommand();
 static bool ToggleImprovedCameraWithRegisteredCommand();
 static bool DispatchManagedSinkToggle(int which);
 static void ArmCSKeyPass(int index);
@@ -1567,6 +1615,7 @@ static void TryManageCatMenuHotkey(bool lateRetry = false);
 static void TryManageDragonbornHotkey(bool lateRetry = false);
 static void RestoreLegacyKreatEBlocking();
 static void RestoreAllModDefaults();
+static void RequestGameExit();
 
 // ----------------------------------------------------------------------------
 // Game-window state used to keep Win32 filtering scoped to Skyrim.
@@ -1609,6 +1658,15 @@ static UINT WINAPI HookedGetRawInputData(HRAWINPUT hRawInput, UINT uiCommand, LP
             if (vkey == VK_CONTROL || vkey == VK_LCONTROL || vkey == VK_RCONTROL) g_RawCtrlDown.store(isDown);
             if (vkey == VK_SHIFT || vkey == VK_LSHIFT || vkey == VK_RSHIFT) g_RawShiftDown.store(isDown);
             if (vkey == VK_MENU || vkey == VK_LMENU || vkey == VK_RMENU) g_RawAltDown.store(isDown);
+            // A modifier key-up can be missed if the game loses focus while it's held (Alt+Tab, etc.),
+            // leaving the sticky flag stuck "down" so every modifier-chord alias afterward reads a
+            // phantom modifier and never matches. Re-sync all three from the real OS state each
+            // keyboard event so they self-correct.
+            if (g_OrigGetAsyncKeyState) {
+                g_RawCtrlDown.store((g_OrigGetAsyncKeyState(VK_CONTROL) & 0x8000) != 0);
+                g_RawShiftDown.store((g_OrigGetAsyncKeyState(VK_SHIFT) & 0x8000) != 0);
+                g_RawAltDown.store((g_OrigGetAsyncKeyState(VK_MENU) & 0x8000) != 0);
+            }
 
             // IED reads WM_INPUT raw keyboard data directly (separate from DirectInput's
             // curState, the event-sink stream, and WM_KEYDOWN) — none of our other blocks
@@ -1908,16 +1966,14 @@ static void CloseActiveModMenu(ActiveMenu active) {
             SKSE::log::info("CloseActiveModMenu: closing dMenu via engine key event.");
         }
     } else if (active == ActiveMenu::ImprovedCamera) {
+        // IC closes on ESC, so send a PLAIN simulated ESC. Do NOT use g_AllowESCSinkBlock here: that
+        // strips ESC from the same input IC reads, which is why the earlier ESC path never closed it.
+        // The native adapter is version-locked, so only use it if it supports the installed build.
         if (SetImprovedCameraOpen(false)) {
             SKSE::log::info("CloseActiveModMenu: closed Improved Camera directly.");
         } else {
-            g_AllowESCSinkBlock.store(true);
             SimulateModifiedKey(0, kEscapeDIK);
-            std::thread([]() {
-                std::this_thread::sleep_for(std::chrono::milliseconds(250));
-                g_AllowESCSinkBlock.store(false);
-            }).detach();
-            SKSE::log::info("CloseActiveModMenu: direct Improved Camera close unavailable; sent ESC fallback.");
+            SKSE::log::info("CloseActiveModMenu: closed Improved Camera via simulated ESC.");
         }
     } else if (active == ActiveMenu::FLICK) {
         if (auto* flick = GetFLICKInterface(); flick && flick->SetMenuOpen) {
@@ -2024,6 +2080,10 @@ static bool CheckLauncherDoubleTap(long long now) {
 // the DI8 GetDeviceState path when the LL hook isn't active.
 static void ToggleLauncher() {
     SKSE::log::info("ToggleLauncher: launcher hotkey pressed.");
+    if (g_ConfigRestartRequired.load()) {
+        SKSE::log::info("ToggleLauncher: ignored while the restart notice is visible.");
+        return;
+    }
     if (IsUserTyping()) {
         SKSE::log::info("ToggleLauncher: hotkey pressed but nothing launched (user is typing).");
         return;
@@ -2050,6 +2110,11 @@ static void ToggleLauncher() {
     g_LastLauncherToggleMs.store(now);
 
     auto active = g_ActiveMenu.load();
+    // IED has a reliable native "is it open" query, so resync it here if it was closed externally.
+    // Do NOT guess from the cursor for other menus: many (FLICK, Improved Camera, Party Sheet,
+    // CatMenu) don't show the OS cursor while open, so a cursor check wrongly reported them closed
+    // and made F1 open the launcher instead of closing them. Stale state after ESC is instead
+    // cleared by the physical-ESC handler in HookedKbProcess the instant ESC is pressed.
     if (active == ActiveMenu::IED && !IsIEDOpen()) {
         g_ActiveMenu.store(ActiveMenu::None);
         active = ActiveMenu::None;
@@ -2383,7 +2448,8 @@ static void SuppressManagedPollKeys() {
         kb->curState[dik] = 0;
         kb->prevState[dik] = 0;
     };
-    zap(g_DMenuConfig.enabled, g_DMenuConfig.toggleDIK,
+    // dMenu managed via the v2 API ignores Home already — don't zero it here (keeps Home free).
+    zap(g_DMenuConfig.enabled && !HasDMenuV2Api(), g_DMenuConfig.toggleDIK,
         InternalAliasKeyAllowed(AI_DMenu, g_UnblockDMenu, g_DMenuConfig.toggleDIK, g_DMenuConfig.modifierDIK),
         g_AllowDMenuOpen.load(), g_AllowDMenuOpenUntilMs.load());
     zap(g_FLICKConfig.enabled, g_FLICKConfig.toggleDIK,
@@ -2392,9 +2458,10 @@ static void SuppressManagedPollKeys() {
     zap(g_IEDConfig.enabled, g_IEDConfig.toggleDIK,
         InternalAliasKeyAllowed(AI_IED, g_UnblockIED, g_IEDConfig.toggleDIK),
         g_AllowIEDOpen.load(), g_AllowIEDOpenUntilMs.load());
-    zap(g_ImprovedCameraConfig.enabled, g_ImprovedCameraConfig.toggleDIK,
-        false,
-        g_AllowImprovedCameraOpen.load(), g_AllowImprovedCameraOpenUntilMs.load());
+    // NOTE: Improved Camera is intentionally NOT zeroed here. It reads its Shift+Home chord via
+    // user32 GetAsyncKeyState/GetKeyState, which we already block caller-scoped (only ImprovedCameraSE
+    // sees 0). Zeroing Home in the global curState would strip it from the game and every other mod —
+    // the exact opposite of this mod's purpose (keep the key free for other uses).
     zap(g_KreatEConfig.enabled, g_KreatEConfig.toggleDIK,
         InternalAliasKeyAllowed(AI_KreatE, g_UnblockKreatE, g_KreatEConfig.toggleDIK),
         g_AllowKreatEOpen.load(), g_AllowKreatEOpenUntilMs.load());
@@ -2517,11 +2584,12 @@ static void HookedKbProcess(RE::BSWin32KeyboardDevice* self, float a_dt) {
                                         (g_AllowDragonbornOpen.load() && now <= g_AllowDragonbornOpenUntilMs.load());
                 const bool lockActive = IsENBOpeningTransition() || now < g_MenuOpenLockUntilMs.load();
                 const bool recentToggle = now - g_LastLauncherToggleMs.load() < 250;
-                // IED's menu swallows input while open, so the normal F1 channels miss it and it
-                // won't close on F1 (only ESC). Its native menu doesn't make the DI poll go stale,
-                // so also run this OS-level read while IED is the active menu. Debounce guards below
-                // stop any double-toggle if a normal channel also catches the key.
-                const bool capturingMenu = g_ActiveMenu.load() == ActiveMenu::IED;
+                // Several mod menus (IED, KreatE, Improved Camera, ...) swallow input while open, so
+                // the normal F1 channels miss the key and F1 can't close them. Their native menus
+                // don't make the DI poll go stale, so run this OS-level read whenever ANY mod menu is
+                // the active menu. The debounce guards below stop a double-toggle if a normal channel
+                // also catches the key.
+                const bool capturingMenu = g_ActiveMenu.load() != ActiveMenu::None;
                 if ((diStale || capturingMenu) && !simulating && !lockActive && !recentToggle &&
                     !IsRebinding() && !IsUserTyping()) {
                     const bool launcherOpen = g_LauncherWindow && g_LauncherWindow->IsOpen.load();
@@ -2590,6 +2658,44 @@ static void HookedKbProcess(RE::BSWin32KeyboardDevice* self, float a_dt) {
         } else {
             s_iedCloseArmed = true;
         }
+    }
+
+    // Unified physical-ESC handling while any mod menu is active. Reads ESC at OS level so it works
+    // regardless of which mod is capturing input. Two cases:
+    //   * Self-closing menus (OAR, dMenu, FLICK, Improved Camera, Party Sheet, SKSE MF, IED) consume
+    //     ESC and close themselves — we ONLY clear our active-menu state so the next F1 opens the
+    //     launcher (this replaces the old cursor guess that misfired and broke F1-close).
+    //   * ESC-ignoring menus (Debug Menu, ENB, KreatE, Dragonborn, CatMenu) are closed explicitly via
+    //     CloseActiveModMenu (each mod's own path / API). Skyrim's ESC menu is already blocked for
+    //     these the whole time they're open (EscBlockedForActiveMenu), so nothing leaks to the game.
+    {
+        const auto escMenu = g_ActiveMenu.load();
+        const bool escDown = (g_OrigGetAsyncKeyState ? g_OrigGetAsyncKeyState(VK_ESCAPE)
+                                                      : ::GetAsyncKeyState(VK_ESCAPE)) & 0x8000;
+        static bool s_escWasDown = false;
+        if (escMenu != ActiveMenu::None && escMenu != ActiveMenu::ReShade &&
+            !IsRebinding() && !IsUserTyping() &&
+            now >= g_MenuOpenLockUntilMs.load() && !IsENBOpeningTransition()) {
+            if (escDown && !s_escWasDown && now - g_LastOriginalHotkeyMs.load() > 300) {
+                g_LastOriginalHotkeyMs.store(now);
+                // dMenu: only the "Risa's dmenu" build closes itself on ESC — stock dMenu / dMenu NG
+                // ignore it. So always close dMenu explicitly through its API/key (harmlessly double-
+                // closes the v2 build). It isn't in EscBlockedForActiveMenu because dMenu blocks the
+                // game's input itself while open, so ESC can't leak, and the v2 build still reads ESC.
+                const bool explicitClose = EscBlockedForActiveMenu() || escMenu == ActiveMenu::DMenu;
+                if (explicitClose) {
+                    SKSE::log::info("HookedKbProcess: ESC closing menu ({}) via its own path.",
+                        static_cast<int>(escMenu));
+                    CloseActiveModMenu(escMenu);
+                } else {
+                    // Self-closing menu: it dismisses itself on ESC; just clear our stale state.
+                    g_ActiveMenu.store(ActiveMenu::None);
+                    SKSE::log::info("HookedKbProcess: ESC on self-closing menu ({}); cleared active-menu state.",
+                        static_cast<int>(escMenu));
+                }
+            }
+        }
+        s_escWasDown = escDown;
     }
 
     // Synthesize a key event through the engine to open the mod the launcher requested.
@@ -2987,9 +3093,10 @@ static HRESULT STDMETHODCALLTYPE HookedGetDeviceState(IDirectInputDevice8A* pDev
             TryManageCSHotkey(true);
             TryManageCatMenuHotkey(true);
             TryManageDragonbornHotkey(true);
+            SyncDMenuKeyViaApi();  // keep dMenu's key freed (or restored) live via the v2 API
         }
 
-        if (g_AllowESCSinkBlock.load()) {
+        if (g_AllowESCSinkBlock.load() || EscBlockedForActiveMenu()) {
             state[0x01] = 0; // zero kEscapeDIK (0x01)
         }
         if (!g_DI8HookFiredOnce.exchange(true))
@@ -3065,13 +3172,18 @@ static HRESULT STDMETHODCALLTYPE HookedGetDeviceState(IDirectInputDevice8A* pDev
 // ============================================================================
 static bool ShouldStripDIKFromBuffer(WORD dik) {
     if (dik == 0) return false;
-    if (g_AllowESCSinkBlock.load() && dik == 0x01) return true;
+    if ((g_AllowESCSinkBlock.load() || EscBlockedForActiveMenu()) && dik == 0x01) return true;
     // dMenu registers no hookable engine input sink, so it reads its key straight from the
     // buffered DirectInput events the engine turns into ButtonEvents. Drop that key HERE
     // (before Process consumes the buffer) so a PHYSICAL press never reaches dMenu and its
     // key stays freed for gameplay. Our launcher opens dMenu via InjectEngineKey/SetButtonState,
     // which writes curState directly and never touches this buffer, so opening still works.
-    if (g_DMenuConfig.enabled && g_DMenuConfig.toggleDIK != 0 && dik == g_DMenuConfig.toggleDIK &&
+    // When dMenu is managed through the v2 API its own key is disabled live, so dMenu never reacts
+    // to Home no matter what — stripping Home here would only block it for the game/other mods
+    // (exactly what this mod is supposed to prevent). Only strip for stock/older dMenu (no v2 API),
+    // which still listens on this key until its ini relocation takes effect.
+    if (!HasDMenuV2Api() &&
+        g_DMenuConfig.enabled && g_DMenuConfig.toggleDIK != 0 && dik == g_DMenuConfig.toggleDIK &&
         !InternalAliasKeyAllowed(AI_DMenu, g_UnblockDMenu, g_DMenuConfig.toggleDIK, g_DMenuConfig.modifierDIK) &&
         !IsUserTyping()) {
         return true;
@@ -3919,7 +4031,13 @@ static void InstallHooks() {
 // ============================================================================
 // Open MF from launcher using its exported main window.
 // ============================================================================
+// Set while a Settings-tab mod button toggles a menu for re-syncing: the launcher must stay open so
+// the user can keep toggling. The mod's Open*() helper still calls CloseLauncher() internally, so we
+// swallow that close here.
+static std::atomic<bool> g_KeepLauncherOpenForSync{ false };
+
 static void CloseLauncher(bool external) {
+    if (g_KeepLauncherOpenForSync.load()) return; // Settings sync button — keep the launcher open
     if (g_LauncherWindow) {
         g_LauncherWindow->IsOpen.store(false);
         g_WaitForLauncherKeyRelease.store(false);
@@ -4864,7 +4982,7 @@ static bool SetCatMenuOpen(bool open) {
     return true;
 }
 
-static bool SetDragonbornOpen(bool open) {
+static bool SetDragonbornOpenLegacy(bool open) {
     HMODULE module = ::GetModuleHandleA("SkyrimCheatMenu.dll");
     if (!module) return false;
 
@@ -4937,6 +5055,47 @@ static bool SetDragonbornOpen(bool open) {
 
     resolved(open);
     return true;
+}
+
+static DBTK_API::IVDBTK1* GetDragonbornToolkitApi() {
+    static std::atomic<DBTK_API::IVDBTK1*> api{ nullptr };
+    static std::atomic<bool> unavailableLogged{ false };
+
+    if (auto* cached = api.load()) return cached;
+    auto* resolved = DBTK_API::GetAPI();
+    if (!resolved) {
+        if (!unavailableLogged.exchange(true)) {
+            SKSE::log::warn("Dragonborn's Toolkit API: RequestPluginAPI v1 unavailable; using the legacy compatibility path.");
+        }
+        return nullptr;
+    }
+
+    const auto version = resolved->GetVersion();
+    if (version < static_cast<std::uint32_t>(DBTK_API::InterfaceVersion::kV1)) {
+        SKSE::log::error("Dragonborn's Toolkit API: rejected interface version {} (v1 required).", version);
+        return nullptr;
+    }
+
+    api.store(resolved);
+    SKSE::log::info("Dragonborn's Toolkit API: connected successfully (interface v{}, DLL=SkyrimCheatMenu.dll).", version);
+    return resolved;
+}
+
+static bool SetDragonbornOpen(bool open) {
+    if (auto* api = GetDragonbornToolkitApi()) {
+        const bool before = api->IsOpen();
+        if (open) {
+            api->Open();
+        } else {
+            api->Close();
+        }
+        const bool after = api->IsOpen();
+        SKSE::log::info(
+            "Dragonborn's Toolkit API: requested={}, before={}, after={}, verified={}.",
+            open ? "OPEN" : "CLOSE", before, after, after == open);
+        return true;
+    }
+    return SetDragonbornOpenLegacy(open);
 }
 
 static void OpenDragonbornToolkit() {
@@ -5266,6 +5425,20 @@ static void LogStartupDiagnostics() {
 // Launcher render
 // ============================================================================
 static void __stdcall RenderLauncher() {
+    if (g_ConfigRestartRequired.load()) {
+        long long started = g_RestartNoticeStartedMs.load();
+        if (started == 0) {
+            started = RestartNoticeNowMs();
+            g_RestartNoticeStartedMs.store(started);
+        }
+        if (RestartNoticeNowMs() - started >= 10000) {
+            g_ConfigRestartRequired.store(false);
+            g_RestartNoticeStartedMs.store(0);
+            CloseLauncher(true);
+            SKSE::log::info("Configuration restart notice closed after 10 seconds.");
+            return;
+        }
+    }
     if (g_ActiveMenu.load() != ActiveMenu::None && !IsCursorShowing()) {
         g_ActiveMenu.store(ActiveMenu::None);
         SKSE::log::info("RenderLauncher: Self-healed active menu state to None (cursor hidden).");
@@ -5275,15 +5448,15 @@ static void __stdcall RenderLauncher() {
     if (g_LauncherWindow && g_LauncherWindow->IsOpen.load()) {
 
 
-        if (ImGuiMCP::IsKeyPressed(ImGuiMCP::ImGuiKey_Escape, false)) {
+        if (!g_ConfigRestartRequired.load() && ImGuiMCP::IsKeyPressed(ImGuiMCP::ImGuiKey_Escape, false)) {
             CloseLauncher(true); // external ESC close — arm the next F1 for a fresh open
             SKSE::log::info("ImGui input: launcher closed by ESC.");
             return;
         }
     }
 
-    // Solid opaque window — no transparency from MF style
-    ImGuiMCP::SetNextWindowBgAlpha(1.0f);
+    // Regular launcher is opaque; the temporary restart notice is translucent.
+    ImGuiMCP::SetNextWindowBgAlpha(g_ConfigRestartRequired.load() ? 0.78f : 1.0f);
     ImGuiMCP::PushStyleColor(2,  ImGuiMCP::ImVec4(0.10f, 0.11f, 0.16f, 1.0f)); // WindowBg
     ImGuiMCP::PushStyleColor(10, ImGuiMCP::ImVec4(0.08f, 0.09f, 0.13f, 1.0f)); // TitleBg
     ImGuiMCP::PushStyleColor(11, ImGuiMCP::ImVec4(0.13f, 0.21f, 0.38f, 1.0f)); // TitleBgActive
@@ -5300,12 +5473,18 @@ static void __stdcall RenderLauncher() {
     static bool  s_prevSettingsActive = false;
     static float s_baseMenuWidth = 0.0f;         // unscaled width captured on the Launcher tab
 
-    const bool settingsActive = s_settingsActive;
+    const bool restartPrompt = g_ConfigRestartRequired.load();
+    const bool settingsActive = !restartPrompt && s_settingsActive;
     const bool justSwitchedToSettings = settingsActive && !s_prevSettingsActive;
     s_prevSettingsActive = settingsActive;
 
     int kFlags = ImGuiMCP::ImGuiWindowFlags_NoCollapse;
-    if (settingsActive) {
+    if (restartPrompt) {
+        kFlags |= ImGuiMCP::ImGuiWindowFlags_NoDecoration |
+                  ImGuiMCP::ImGuiWindowFlags_AlwaysAutoResize |
+                  ImGuiMCP::ImGuiWindowFlags_NoInputs |
+                  ImGuiMCP::ImGuiWindowFlags_NoScrollbar;
+    } else if (settingsActive) {
         const float layoutScaleVal = g_LauncherFontScale.load() / 0.9f;
         const float w = (s_baseMenuWidth > 50.0f) ? (s_baseMenuWidth * layoutScaleVal) : (612.0f * layoutScaleVal);
         float maxH = 800.0f;
@@ -5326,14 +5505,32 @@ static void __stdcall RenderLauncher() {
                   ImGuiMCP::ImGuiWindowFlags_NoScrollbar;
     }
 
-    if (g_WindowPosX.load() != -1.0f && g_WindowPosY.load() != -1.0f) {
+    if (restartPrompt) {
+        if (auto* io = ImGuiMCP::GetIO()) {
+            // Middle-left: left edge, vertically centered (pivot 0,0.5) so it clears the ENB overlay.
+            ImGuiMCP::SetNextWindowPos(ImGuiMCP::ImVec2(24.0f, io->DisplaySize.y * 0.5f),
+                ImGuiMCP::ImGuiCond_Always, ImGuiMCP::ImVec2(0.0f, 0.5f));
+        }
+    } else if (g_WindowPosX.load() != -1.0f && g_WindowPosY.load() != -1.0f) {
         ImGuiMCP::SetNextWindowPos(ImGuiMCP::ImVec2(g_WindowPosX.load(), g_WindowPosY.load()), ImGuiMCP::ImGuiCond_FirstUseEver, ImGuiMCP::ImVec2(0.0f, 0.0f));
     } else if (auto* io = ImGuiMCP::GetIO()) {
         ImGuiMCP::SetNextWindowPos(ImGuiMCP::ImVec2(io->DisplaySize.x * 0.5f, io->DisplaySize.y * 0.5f), ImGuiMCP::ImGuiCond_FirstUseEver, ImGuiMCP::ImVec2(0.5f, 0.5f));
     }
 
     bool open = true;
-    if (!ImGuiMCP::Begin("Risa's Menu Launcher", &open, kFlags)) {
+    // Title reflects the current view so players know which mod a sub-hub belongs to. The "###" keeps
+    // a STABLE window id ("RisaMenuLauncher") regardless of the visible label, so position/size persist.
+    const int titleSub = restartPrompt ? 0 : g_LauncherSubView.load();
+    const char* titleText = (titleSub == 1 && g_CSConfig.enabled)        ? "Community Shaders"
+                          : (titleSub == 2 && g_PartySheetConfig.enabled) ? "Skyrim Party Sheet"
+                          :                                                  "Risa's Menu Launcher";
+    const std::string windowTitle = std::string(titleText) + "###RisaMenuLauncher";
+    // Center the window title. WindowTitleAlign is read during Begin, so scope the push tightly
+    // around it and pop right after (keeps the outer style-var bookkeeping unchanged).
+    ImGuiMCP::PushStyleVar(ImGuiMCP::ImGuiStyleVar_WindowTitleAlign, ImGuiMCP::ImVec2(0.5f, 0.5f));
+    const bool beginOpen = ImGuiMCP::Begin(windowTitle.c_str(), restartPrompt ? nullptr : &open, kFlags);
+    ImGuiMCP::PopStyleVar(1);
+    if (!beginOpen) {
         ImGuiMCP::PopStyleVar(2); ImGuiMCP::PopStyleColor(4); ImGuiMCP::End(); return;
     }
 
@@ -5351,12 +5548,12 @@ static void __stdcall RenderLauncher() {
             SaveButtonOrder();
             s_heightChangedMs = 0;
         }
-    } else {
+    } else if (!restartPrompt) {
         const float layoutScaleVal = g_LauncherFontScale.load() / 0.9f;
         s_baseMenuWidth = ImGuiMCP::GetWindowWidth() / layoutScaleVal;
     }
 
-    {
+    if (!restartPrompt) {
         ImGuiMCP::ImVec2 currentPos;
         ImGuiMCP::GetWindowPos(&currentPos);
         
@@ -5402,7 +5599,9 @@ static void __stdcall RenderLauncher() {
     const bool hasImprovedCamera = g_ImprovedCameraConfig.enabled;
     const bool hasFLICK = g_FLICKConfig.enabled;
     const bool hasKreatE = g_KreatEConfig.enabled;
-    const bool hasCS = g_CSConfig.enabled;
+    // Community Shaders is incompatible with ENB and disables itself when ENB is installed, so
+    // hide the CS button entirely when ENB is detected (the button filter below drops inactive ones).
+    const bool hasCS = g_CSConfig.enabled && !g_ENBConfig.enabled;
     const bool hasPartySheet = g_PartySheetConfig.enabled;
     const bool hasCatMenu = g_CatMenuConfig.enabled;
     const bool hasDragonborn = g_DragonbornConfig.enabled;
@@ -5453,6 +5652,25 @@ static void __stdcall RenderLauncher() {
         ImGuiMCP::ImVec2(12.0f * layoutScale, 6.0f * layoutScale));
     ImGuiMCP::PushStyleVar(ImGuiMCP::ImGuiStyleVar_ItemSpacing,
         ImGuiMCP::ImVec2(8.0f * layoutScale, 8.0f * layoutScale));
+
+    if (restartPrompt) {
+        // Mod name header so players know which mod this notification is from.
+        ImGuiMCP::TextColored(ImGuiMCP::ImVec4(0.36f, 0.58f, 0.86f, 1.0f),
+            "Risa's All In One Menu");
+        ImGuiMCP::Separator();
+        ImGuiMCP::TextColored(ImGuiMCP::ImVec4(1.00f, 0.65f, 0.30f, 1.0f),
+            "Mod hotkey configuration updated");
+        ImGuiMCP::Text("Restart Skyrim for the changes to take effect.");
+
+        ImGuiMCP::PopStyleVar(3);
+        ImGuiMCP::PopStyleColor(3);
+        ImGuiMCP::End();
+        ImGuiMCP::PopStyleVar(2);
+        ImGuiMCP::PopStyleColor(4);
+        if (auto* w = ImGuiMCP::FindWindowByName("###RisaMenuLauncher"))
+            ImGuiMCP::BringWindowToDisplayFront(w);
+        return;
+    }
 
     if (ImGuiMCP::BeginTabBar("LauncherTabs", 0)) {
         if (ImGuiMCP::BeginTabItem((FontAwesome::UnicodeToUtf8(0xf0e4) + "  Launcher").c_str(), nullptr, 0)) {
@@ -5860,7 +6078,13 @@ static void __stdcall RenderLauncher() {
                     }
                     const std::string nameBtnLabel = std::string(modName) + "##ModBtn_" + id;
                     if (ImGuiMCP::Button(nameBtnLabel.c_str(), ImGuiMCP::ImVec2(-1.0f, 0.0f))) {
+                        // These Settings buttons toggle the mod to re-sync a menu that got out of
+                        // state — keep Risa's launcher OPEN (unlike the main grid buttons, which
+                        // dismiss it). The mod's Open*() helper calls CloseLauncher() internally, so
+                        // suppress that for the duration of this click.
+                        g_KeepLauncherOpenForSync.store(true);
                         simulateAction();
+                        g_KeepLauncherOpenForSync.store(false);
                     }
                     if (isSub) { ImGuiMCP::PopStyleColor(3); ImGuiMCP::Unindent(18.0f * layoutScale); }
 
@@ -6131,11 +6355,25 @@ static void __stdcall RenderLauncher() {
 
                 static bool s_confirmRestore = false;
                 static bool s_restoreDone = false;
-                static bool s_scrollToBottom = false;
+                static int s_scrollToBottomFrames = 0;
+                static bool s_exitDismissed = false;
                 if (s_restoreDone) {
                     ImGuiMCP::TextColored(ImGuiMCP::ImVec4(0.40f, 1.00f, 0.55f, 1.0f),
-                        "All mod hotkeys restored to their defaults.");
-                    ImGuiMCP::Text("Restart Skyrim once, then it's safe to uninstall this mod.");
+                        "All mod hotkeys restored to their captured originals.");
+                    ImGuiMCP::Text("Quit Skyrim, then disable this mod before the next launch.");
+                    if (!s_exitDismissed) {
+                        ImGuiMCP::Spacing();
+                        ImGuiMCP::TextColored(ImGuiMCP::ImVec4(1.00f, 0.65f, 0.30f, 1.0f),
+                            "Do you want to exit the game now?");
+                        if (ImGuiMCP::Button("Yes, quit to desktop now", ImGuiMCP::ImVec2(0.0f, 0.0f))) {
+                            SKSE::log::info("Restore UI: user chose to exit now; posting a deferred window-close request.");
+                            RequestGameExit();
+                        }
+                        ImGuiMCP::SameLine(0.0f, 8.0f * layoutScale);
+                        if (ImGuiMCP::Button("No, I'll exit later", ImGuiMCP::ImVec2(0.0f, 0.0f))) {
+                            s_exitDismissed = true;
+                        }
+                    }
                 } else if (s_confirmRestore) {
                     ImGuiMCP::TextColored(ImGuiMCP::ImVec4(1.00f, 0.65f, 0.30f, 1.0f),
                         "Are you sure? This reverts every mod to its original hotkey.");
@@ -6143,22 +6381,25 @@ static void __stdcall RenderLauncher() {
                         RestoreAllModDefaults();
                         s_confirmRestore = false;
                         s_restoreDone = true;
+                        s_scrollToBottomFrames = 3;
                     }
                     ImGuiMCP::SameLine(0.0f, 8.0f * layoutScale);
                     if (ImGuiMCP::Button("Cancel", ImGuiMCP::ImVec2(0.0f, 0.0f))) {
                         s_confirmRestore = false;
                     }
                     // Confirm buttons just appeared below the fold — scroll them into view.
-                    if (s_scrollToBottom) {
-                        ImGuiMCP::SetScrollHereY(1.0f);
-                        s_scrollToBottom = false;
-                    }
                 } else {
                     if (ImGuiMCP::Button("Restore Hotkeys for Uninstall", launcherButtonSize)) {
                         s_confirmRestore = true;
-                        s_scrollToBottom = true;
+                        s_scrollToBottomFrames = 3;
                     }
                     ImGuiMCP::SetItemTooltip("Run this BEFORE uninstalling: it rewrites each managed mod's config\nback to its original hotkey, undoing every change this mod made.");
+                }
+
+                // Keep pushing to the true bottom while ImGui recalculates the changed child height.
+                if (s_scrollToBottomFrames > 0) {
+                    ImGuiMCP::SetScrollY(ImGuiMCP::GetScrollMaxY());
+                    --s_scrollToBottomFrames;
                 }
             }
 
@@ -6178,7 +6419,7 @@ static void __stdcall RenderLauncher() {
     ImGuiMCP::PopStyleColor(4);
 
     // Keep on top
-    if (auto* w = ImGuiMCP::FindWindowByName("Risa's Menu Launcher"))
+    if (auto* w = ImGuiMCP::FindWindowByName("###RisaMenuLauncher"))
         ImGuiMCP::BringWindowToDisplayFront(w);
 }
 
@@ -6337,6 +6578,7 @@ static void ManageDebugMenuKey() {
     for (const auto& l : lines) out << l << "\n";
     out.close();
 
+    MarkConfigRestartRequired("Debug Menu hotkey");
     SKSE::log::info("ManageDebugMenuKey: DebugMenu shared the launcher key (0x{:02X}); set {} uOpenMenuHotkey = {} ({}). "
                     "The change was written during plugin startup.",
         g_DebugMenuConfig.toggleDIK, settingsIni.string(), static_cast<int>(freeKey), NameFromDIK(freeKey));
@@ -6397,6 +6639,7 @@ static void TryManageKreatEHotkey(bool lateRetry) {
 
     g_KreatEIniManaged.store(true);
     if (result == 1) {
+        MarkConfigRestartRequired("KreatE hotkey");
         SKSE::log::info("TryManageKreatEHotkey: KreatE GUIToggleKeys -> F18 (was End).{}",
             lateRetry ? " Restart Skyrim once so KreatE reads the generated setting." : "");
     } else {
@@ -6487,6 +6730,7 @@ static void TryManageCSHotkey(bool lateRetry) {
 
     if (any) {
         g_CSIniManaged.store(true);
+        MarkConfigRestartRequired("Community Shaders hotkeys");
         SKSE::log::info("TryManageCSHotkey: Community Shaders keys -> F19 / F15 / F23 / F24. Restart required.");
     } else if (std::filesystem::exists(userJson) || std::filesystem::exists(defaultJson)) {
         g_CSIniManaged.store(true);
@@ -6517,6 +6761,7 @@ static void TryManageCatMenuHotkey(bool lateRetry) {
     g_CatMenuConfig.toggleDIK = 0x6C;
     g_CatMenuIniManaged.store(true);
     if (result == 1) {
+        MarkConfigRestartRequired("CatMenu hotkey");
         SKSE::log::info("TryManageCatMenuHotkey: CatMenu parking key -> F21; native listener is intercepted.{}",
             lateRetry ? " Restart Skyrim once so CatMenu reads the generated setting." : "");
     } else {
@@ -6544,6 +6789,7 @@ static void TryManageDragonbornHotkey(bool lateRetry) {
     g_DragonbornConfig.toggleVK = 0;
     g_DragonbornIniManaged.store(true);
     if (result == 1) {
+        MarkConfigRestartRequired("Dragonborn's Toolkit hotkey");
         SKSE::log::info("TryManageDragonbornHotkey: disabled Dragonborn's Toolkit native hotkey.{}",
             lateRetry ? " Restart Skyrim once so Dragonborn's Toolkit reads the generated setting." : "");
     } else {
@@ -6606,6 +6852,7 @@ static void RestoreLegacyKreatEBlocking() {
     const std::filesystem::path ini = "Data/KreatE/UserSettings.ini";
     const int result = SetIniTextValue(ini, "Blocking", original != 0 ? "true" : "false");
     if (result >= 0) {
+        if (result == 1) MarkConfigRestartRequired("KreatE legacy Blocking setting");
         SKSE::log::info("RestoreLegacyKreatEBlocking: restored KreatE Input.Blocking to {} and removed the legacy keep-open option.", original != 0);
         SaveButtonOrder();
     }
@@ -6616,6 +6863,7 @@ static void DisableMFHotkey() {
     const int result = SetIniTextValue(ini, "ToggleMode", "OFF");
     g_MFIniWriteResult.store(result);
     if (result == 1) {
+        MarkConfigRestartRequired("SKSE Menu Framework hotkey");
         SKSE::log::info("DisableMFHotkey: set SKSE Menu Framework ToggleMode to OFF before it loaded.");
     } else if (result == 0) {
         SKSE::log::info("DisableMFHotkey: SKSE Menu Framework ToggleMode is already OFF.");
@@ -6672,6 +6920,7 @@ static void ManageReShadeHotkey() {
     std::ofstream out(ini, std::ios::trunc);
     if (!out.is_open()) { SKSE::log::error("ManageReShadeHotkey: cannot write {}.", ini.string()); return; }
     for (const auto& l : lines) out << l << "\n";
+    MarkConfigRestartRequired("ReShade overlay hotkey");
     SKSE::log::info("ManageReShadeHotkey: ReShade KeyOverlay -> {} at {}. RESTART once.",
         targetVK == 0 ? "DISABLED (add-on API drives the overlay; Home + F22 freed)" : "F22 (was Home)",
         ini.string());
@@ -6815,6 +7064,36 @@ static void CaptureOriginalHotkeys() {
     SKSE::log::info("HotkeyBackup: capture pass complete ({} entries total).", g_HotkeyBackup.size());
 }
 
+// True once we've taken dMenu's toggle key over through the v2 API (so we must NOT also touch/
+// restore dmenu.ini for it — the ini was never modified).
+static std::atomic<bool> g_DMenuManagedViaApi{ false };
+// The user's own dMenu keyboard key, captured live the first time we sync (before we zero it),
+// so "enable original hotkey" restores exactly what they had rather than a guessed default.
+static std::atomic<std::uint32_t> g_DMenuOrigKeyMkb{ 199 };  // 199 = Home
+static std::atomic<bool> g_DMenuOrigKeyCaptured{ false };
+
+// Drive dMenu's keyboard toggle key live via the API v2: 0 while blocked (frees Home), or the
+// user's captured key when they enable the original hotkey. No ini edit, no restart. Safe to call
+// every frame/second — it only writes when the value actually needs to change.
+static void SyncDMenuKeyViaApi() {
+    if (!HasDMenuV2Api()) return;
+    const auto* api = g_DMenuApi.load();
+    if (api->IsReady && !api->IsReady()) return;  // wait until dMenu has loaded its own settings
+
+    if (!g_DMenuOrigKeyCaptured.exchange(true)) {
+        const std::uint32_t cur = api->GetToggleKeyMkb();
+        if (cur != 0) g_DMenuOrigKeyMkb.store(cur);  // remember the real configured key
+    }
+
+    const std::uint32_t want = g_UnblockDMenu.load() ? g_DMenuOrigKeyMkb.load() : 0u;
+    if (api->GetToggleKeyMkb() != want) {
+        api->SetToggleKeyMkb(want);
+        SKSE::log::info("SyncDMenuKeyViaApi: set dMenu keyboard toggle to {} ({}).",
+            want, want == 0 ? "disabled — Home free" : "restored user key");
+    }
+    g_DMenuManagedViaApi.store(true);
+}
+
 static void ManageModHotkeys() {
     bool any = false;
     if (g_OARConfig.enabled) {
@@ -6839,13 +7118,22 @@ static void ManageModHotkeys() {
         }
     }
     if (g_DMenuConfig.enabled) {
-        // dMenu exposes no API/hookable sink, so the ONLY reliable way to free its Home key for
-        // gameplay is to relocate its listener onto an unpressable F-key (F14 = DIK 0x65 = 101).
-        // dMenu then never reacts to a physical Home; the launcher opens it via InjectEngineKey(F14),
-        // which dMenu reads as a normal engine ButtonEvent. Takes effect next launch (dMenu reads
-        // its ini before we run). Reverted to Home by RestoreAllModDefaults for uninstall.
-        if (SetIniValue("Data/SKSE/Plugins/dmenu/dmenu.ini", "key_toggle_dmenu", 101) == 1) { // F14
-            any = true; SKSE::log::info("ManageModHotkeys: relocated dMenu to F14 (0x65); Home freed. Launcher opens it via engine injection. RESTART once.");
+        // Preferred path: dMenu NG API v2 lets us free (or restore) dMenu's keyboard toggle key
+        // LIVE — no dmenu.ini edit and no restart. SyncDMenuKeyViaApi() (driven every second and
+        // gated on dMenu being ready) sets the key to 0 while blocked and back to the user's own
+        // key when they enable the original hotkey. Because we never touch the ini, there is
+        // nothing to undo on uninstall.
+        AcquireDMenuApiFromExport();
+        if (HasDMenuV2Api()) {
+            SyncDMenuKeyViaApi();
+            SKSE::log::info("ManageModHotkeys: dMenu key managed live via API v2 (Home freed, no ini edit, no restart).");
+        } else {
+            // Fallback for stock dMenu (no v2 API): relocate its listener onto the unpressable F14
+            // (DIK 0x65 = 101) in dmenu.ini so it never reacts to Home. Takes effect next launch;
+            // reverted to Home by RestoreAllModDefaults on uninstall.
+            if (SetIniValue("Data/SKSE/Plugins/dmenu/dmenu.ini", "key_toggle_dmenu", 101) == 1) { // F14
+                any = true; SKSE::log::info("ManageModHotkeys: relocated dMenu to F14 (0x65); Home freed. Launcher opens it via engine injection. RESTART once.");
+            }
         }
     }
     if (g_ImprovedCameraConfig.enabled) {
@@ -6892,9 +7180,31 @@ static void ManageModHotkeys() {
             }
         }
     }
-    if (any) SKSE::log::info("ManageModHotkeys: mod hotkeys changed — RESTART Skyrim once for them to take effect.");
+    if (any) {
+        MarkConfigRestartRequired("supported mod hotkeys");
+        SKSE::log::info("ManageModHotkeys: mod hotkeys changed — RESTART Skyrim once for them to take effect.");
+    }
 }
 
+// Post the close request instead of running "qqq" from the ImGui render callback. Executing
+// qqq synchronously can tear game state down before SKSE Menu Framework finishes that callback.
+static void RequestGameExit() {
+    HWND hwnd = g_GameHWND.load();
+    if (!hwnd) {
+        if (auto* renderWindow = RE::BSGraphics::Renderer::GetCurrentRenderWindow()) {
+            hwnd = reinterpret_cast<HWND>(renderWindow->hWnd);
+        }
+    }
+    if (!hwnd || !::IsWindow(hwnd)) {
+        SKSE::log::error("RequestGameExit: could not find Skyrim's game window.");
+        return;
+    }
+    if (!::PostMessageW(hwnd, WM_CLOSE, 0, 0)) {
+        SKSE::log::error("RequestGameExit: PostMessageW(WM_CLOSE) failed with error {}.", ::GetLastError());
+        return;
+    }
+    SKSE::log::info("RequestGameExit: deferred WM_CLOSE posted successfully.");
+}
 // Revert every managed mod's hotkey back to its original default — undoes all the edits this
 // mod made. Intended as "uninstall prep": run it, restart once, then it's safe to disable the
 // mod and every other mod behaves as if Risa's menu had never touched it. Files that don't
@@ -6924,7 +7234,15 @@ static void RestoreAllModDefaults() {
     ini("Data/SKSE/Plugins/OpenAnimationReplacer.ini", "uToggleUIKeyShift", "OAR.uToggleUIKeyShift", 1);
     ini("Data/SKSE/Plugins/OpenAnimationReplacer.ini", "uToggleUIKeyCtrl",  "OAR.uToggleUIKeyCtrl",  0);
     ini("Data/SKSE/Plugins/OpenAnimationReplacer.ini", "uToggleUIKeyAlt",   "OAR.uToggleUIKeyAlt",   0);
-    ini("Data/SKSE/Plugins/dmenu/dmenu.ini", "key_toggle_dmenu", "dMenu.key_toggle_dmenu", 199);
+    // dMenu: only restore the ini if we actually relocated it there (stock-dMenu fallback). When
+    // the v2 API managed it, dmenu.ini was never touched, so there is nothing to undo — just put
+    // the live key back to the user's own value in case they uninstall without restarting.
+    if (g_DMenuManagedViaApi.load()) {
+        if (HasDMenuV2Api()) { if (const auto* api = g_DMenuApi.load()) api->SetToggleKeyMkb(g_DMenuOrigKeyMkb.load()); }
+        SKSE::log::info("Restore[API] dMenu key managed live; dmenu.ini left untouched (restored key {}).", g_DMenuOrigKeyMkb.load());
+    } else {
+        ini("Data/SKSE/Plugins/dmenu/dmenu.ini", "key_toggle_dmenu", "dMenu.key_toggle_dmenu", 199);
+    }
     ini("Data/SKSE/Plugins/ImprovedCameraSE/ImprovedCameraSE.ini", "MenuKey", "IC.MenuKey", 0x24, true);
     ini("Data/SKSE/Plugins/ImmersiveEquipmentDisplays.ini", "ToggleKeys", "IED.ToggleKeys", 0x0E, true);
     SetIniTextValue("Data/SKSE/Plugins/ImmersiveEquipmentDisplays.ini", "OverrideToggleKeys", "false");
@@ -7056,6 +7374,11 @@ static void MessageHandler(SKSE::MessagingInterface::Message* msg) {
 
         if (!g_LauncherWindow) { SKSE::log::error("kPostLoad: AddWindow null."); return; }
         SKSE::log::info("kPostLoad: Launcher window registered.");
+        if (g_ConfigRestartRequired.load()) {
+            g_LauncherWindow->IsOpen.store(true);
+            g_LauncherWindow->BlockUserInput.store(false);
+            SKSE::log::info("kPostLoad: configuration changes detected; 10-second restart notice opened.");
+        }
         g_FrameworkInputEvent = SKSEMenuFramework::AddInputEvent(FrameworkInputCallback);
         SKSE::log::info("kPostLoad: SKSE Menu Framework input callback registered.");
         InstallHooks();
@@ -7084,7 +7407,7 @@ static void MessageHandler(SKSE::MessagingInterface::Message* msg) {
 // Plugin entry point
 // ============================================================================
 SKSEPluginInfo(
-    .Version              = REL::Version{ 1, 4, 0, 0 },
+    .Version              = REL::Version{ 1, 5, 0, 0 },
     .Name                 = "RisaAllInOneMenu",
     .Author               = "Risa",
     .SupportEmail         = "",

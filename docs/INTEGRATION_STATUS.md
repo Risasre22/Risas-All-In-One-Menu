@@ -15,7 +15,7 @@ can break after an update, and where an author-provided API would remove remaini
 | IED 1.7.5b | Native render-task lifecycle | No | None | Yes | Last update 2023-12-10 | Medium | API desirable, low urgency |
 | Improved Camera public | Verified internal UIMenu functions | No | None | Yes | Working | Medium | API desirable |
 | Improved Camera Discord | Registered `ic menu` command and Escape | Partial | None | Tracked | Working | Medium | Close/query API desirable |
-| Dragonborn's Toolkit | Internal `SetMenuOpen(bool)` | No | None | Yes | Unknown | Medium | API desirable |
+| Dragonborn's Toolkit | Official `IVDBTK1` API | Yes | None | Yes | Yes | Low | API available in v0.4+; legacy fallback retained |
 | CatMenu | Direct UI state and listener interception | No | None | Yes | Older/unsupported | Medium | Monitor only |
 | Skyrim Party Sheet | Targeted sink plus guarded native Inspect Card | No | None | Tracked | Last update 2026-06-17 | Medium | Request open/close/query API |
 | Open Animation Replacer | Internal UIManager state | No | F13 | Yes | Last update 2026-06-27 | Medium-high | Request API/native-key disable |
@@ -43,7 +43,7 @@ flowchart LR
     Launcher --> Internal["Verified internal adapters"]
     Internal --> IED["IED"]
     Internal --> ICPublic["Improved Camera public"]
-    Internal --> Dragonborn["Dragonborn's Toolkit"]
+    API --> Dragonborn["Dragonborn's Toolkit"]
     Internal --> CatMenu["CatMenu"]
     Internal --> OAR["OAR: F13 still parked"]
 
