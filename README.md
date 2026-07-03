@@ -94,19 +94,6 @@ To deploy automatically to a local test installation, add an explicit cache valu
 
 Windows users can alternatively run `build.bat` after setting `VCPKG_ROOT`.
 
-## Privacy and Safety
-
-- No networking or telemetry
-- No downloading or execution of external files
-- No Papyrus scripts
-- Diagnostic logging is local and disabled by default
-- Configuration writes are limited to hotkey settings used by supported menu integrations
-- Managed hotkey changes can be restored from the in-game Maintenance section
-
-The project was developed with AI assistance and tested iteratively in Skyrim. Its source is public so users and mod authors can inspect the implementation.
-
-The `1` prefix in `1RisaAllInOneMenu.dll` is intentional and must not be removed.
-
 ## Reporting Issues
 
 Enable **Settings > Maintenance > Enable logging**, reproduce the problem, and include:
