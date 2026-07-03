@@ -28,3 +28,6 @@ docs/INPUT_TEST_HELPER.md
 
 # Hotkey tester runtime state (snapshots, expected values, results)
 tools/Risa Hotkey Tester/TesterData/
+
+# MkDocs build output (the site is built and published by GitHub Actions)
+site/
