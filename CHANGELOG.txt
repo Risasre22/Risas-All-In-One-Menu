@@ -1,0 +1,74 @@
+RISA'S ALL IN ONE MENU - CHANGELOG
+===================================
+Newest first. "In progress" = built/deployed locally but not yet released.
+Claude keeps this file up to date automatically as changes are made.
+
+
+1.5.4  (in progress)
+--------------------
+New:
+- "Keep the game running while menu is open" option (Settings, off by default).
+  By default menus pause the game; turn this on to keep the world moving
+  (animations, fire, NPCs) while a menu is open.
+- "Can open menu while console is open" option (Settings, off by default). Lets the
+  launcher open while the console is up, so menus can be edited with time stopped
+  (navigate with the mouse - the console keeps the keyboard).
+- While the console is open, menus that can't be driven from it (IED, Debug Menu,
+  Improved Camera, KreatE, Skyrim Party Sheet, CatMenu, Dragonborn's Toolkit) are
+  greyed out in the launcher.
+
+Fixed:
+- KreatE (and other menus that hide the cursor) could get out of sync - the
+  launcher lost track of them and F1 re-opened instead of closing, sometimes with
+  a hitch on the first open. No longer uses cursor visibility to tell if those
+  menus are open.
+- Debug Menu now relocates to an unpressable F17 instead of F2, so it no longer
+  clashes with popular mods that use F2 (e.g. PPA). Existing F2 installs migrate
+  automatically; still restored to F1 on uninstall.
+- "Restore for uninstall" no longer falsely reports "incomplete" when a supported
+  mod's config simply didn't contain a key it manages; it only reports a genuine
+  write failure now.
+- Community Shaders (both the Main Menu and the Editor) now close with F1 while the
+  console is open. F1 simply simulates Escape, which is what closes either CS window
+  while the console is up.
+- "Keep the game running" now clears the freeze from the render callback instead of
+  the keyboard hook. The framework suppresses the keyboard hook while a menu is open,
+  which is why the option did nothing before; the render callback runs every frame the
+  menu is drawn, so the world keeps moving without disturbing the mouse cursor.
+
+
+1.5.3
+-----
+- Uninstall overhaul: "Restore My Original Settings" / "Restore Supported Mod
+  Defaults", quit-to-desktop prompt, captured-originals backup with self-heal that
+  purges poisoned relocation values.
+- dMenu NG v2 API: keyless live hotkey control (frees Home with no ini edit),
+  driven from a ReShade-proof path.
+- FLICK: targets keybinds_user.ini when present (the file FLICK actually reads).
+- IED parked on F16 (Backspace freed); unified ESC/F1 close across all menus.
+- Added the plain-English file-change audit log; removed leftover diagnostic code.
+
+
+1.5.0
+-----
+- dMenu NG v2 API, ESC/F1 close rework, IED F16 relocation, settings sync buttons.
+
+1.4.0
+-----
+- Community Shaders & Skyrim Party Sheet sub-menus, dMenu NG API, ReShade add-on.
+
+1.3.0
+-----
+- Rebindable hotkeys, settings reorganization, and fixes.
+
+1.2.1
+-----
+- Menu integrations and settings update.
+
+1.1.0
+-----
+- Hotkey and UI improvements.
+
+1.0.0
+-----
+- Initial public release.

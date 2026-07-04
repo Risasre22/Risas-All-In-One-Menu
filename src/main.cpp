@@ -102,7 +102,7 @@ static void DMenuApiMessageHandler(SKSE::MessagingInterface::Message* msg) {
     SKSE::log::info("dMenu API received via SKSE message (interface v{}).", iface->interfaceVersion);
 }
 
-static constexpr std::string_view kRisaMenuVersion = "1.5.3";
+static constexpr std::string_view kRisaMenuVersion = "1.5.4";
 static std::string g_RuntimeVersion = "Unknown";
 static std::string g_SKSEVersion = "Unknown";
 static std::string g_RuntimeEdition = "Unknown";
@@ -319,6 +319,29 @@ enum class ActiveMenu {
 };
 static std::atomic<ActiveMenu> g_ActiveMenu{ ActiveMenu::None };
 
+// Menus that keep the OS/game cursor hidden even while open — either key-toggled or drawing their
+// own ImGui software cursor. For these a hidden cursor does NOT mean the menu closed, so the
+// cursor-based self-heal must skip them; otherwise it wrongly resets our active-menu state and the
+// launcher key desyncs their open/close (e.g. KreatE would fail to close on F1 and just re-toggle).
+// Their real close is caught by the explicit ESC handler / toggle path instead.
+static bool MenuIgnoresOSCursor(ActiveMenu am) {
+    switch (am) {
+        case ActiveMenu::KreatE:
+        case ActiveMenu::FLICK:
+        case ActiveMenu::ImprovedCamera:
+        case ActiveMenu::PartySheet:
+        case ActiveMenu::CatMenu:
+        case ActiveMenu::DMenu:
+        case ActiveMenu::DebugMenu:
+        case ActiveMenu::ENB:
+        case ActiveMenu::Dragonborn:
+        case ActiveMenu::ReShade:
+            return true;
+        default:
+            return false;
+    }
+}
+
 // Launcher sub-view: which mod's "hub" of sub-buttons the Launcher tab is showing.
 // 0 = none (normal button grid), 1 = Community Shaders hub, 2 = Skyrim Party Sheet hub.
 static std::atomic<int> g_LauncherSubView{ 0 };
@@ -504,9 +527,80 @@ static bool IsUserTyping() {
     return ui && (ui->IsMenuOpen("Console") || ui->IsMenuOpen("TextEntryMenu"));
 }
 
+// Opt-in: allow the launcher to open while the console is open (the console pauses time, letting
+// menus be edited with time stopped, and some editors need a console-picked target). Off by default.
+static std::atomic<bool> g_AllowOpenInConsole{ false };
+
+// Typing gate for the LAUNCHER hotkey only. Real text-entry fields (rename/search boxes) always
+// block it, but the console is allowed through when the user opted in. Mod-alias suppression keeps
+// using IsUserTyping() so those keys never fire while the console has focus.
+static bool IsLauncherTypingBlocked() {
+    auto* ui = RE::UI::GetSingleton();
+    if (!ui) return false;
+    if (ui->IsMenuOpen("TextEntryMenu")) return true;
+    if (ui->IsMenuOpen("Console")) return !g_AllowOpenInConsole.load();
+    return false;
+}
+
+static bool IsConsoleOpen() {
+    auto* ui = RE::UI::GetSingleton();
+    return ui && ui->IsMenuOpen("Console");
+}
+
 static SKSEMenuFramework::Model::WindowInterface* g_LauncherWindow = nullptr;
 static std::atomic<bool> g_ConfigRestartRequired{ false };
 static std::atomic<long long> g_RestartNoticeStartedMs{ 0 };
+
+// Opt-in: keep the game world running (animations, fire, NPCs) while our UI is open. By default the
+// menu pauses the game (SKSE Menu Framework does this); turning this ON overrides that so the world
+// keeps moving. Off by default (i.e. the game stays paused unless the user opts in).
+static std::atomic<bool> g_KeepGameRunning{ false };
+
+// "Keep the game running" clears the game's freezeTime that SKSE Menu Framework sets while a blocking
+// window is open. We must NOT touch the window's BlockUserInput flag to do this: that flag is what
+// gives the menu its mouse cursor and input capture, so dropping it kills the cursor and lets the
+// game grab the mouse. Instead we leave BlockUserInput true and just override freezeTime.
+//
+// The catch: while BlockUserInput is true the framework suppresses the keyboard-process hook, so this
+// can't be driven from there (that was the original bug - it never ran while the menu was up). It is
+// called from RenderLauncher instead, which the framework invokes every frame it draws our window,
+// regardless of input blocking - so our clear lands after the framework's freeze each frame.
+//
+// freezeTime is a single global shared with every other framework window, so our override MUST be
+// scoped tightly: it only runs while OUR launcher window is open (NOT g_ActiveMenu, which includes the
+// SKSE MF menu and other mods' menus), and when our window closes we hand freezeTime back exactly as
+// the framework set it (frozen). Otherwise our "false" leaks into whatever framework window opens next
+// - e.g. the SKSE MF menu would come up un-frozen because it inherited our value.
+static std::atomic<bool> g_FreezeOverridden{ false }; // we currently hold freezeTime down for our menu
+static std::atomic<bool> g_FreezeSaved{ false };      // the value to restore (what the framework set)
+
+// Undo our freezeTime override, if any, restoring the value the framework had. Idempotent.
+static void RestoreFreezeOverride() {
+    if (g_FreezeOverridden.exchange(false)) {
+        auto* main = RE::Main::GetSingleton();
+        if (main) main->freezeTime = g_FreezeSaved.load();
+    }
+}
+
+static void UpdateTimeFreeze() {
+    auto* main = RE::Main::GetSingleton();
+    if (!main) return;
+    // Strictly OUR launcher window - nobody else's menu. When it isn't open, release the override so we
+    // never affect another framework window's freeze.
+    const bool ours = g_KeepGameRunning.load() && g_LauncherWindow && g_LauncherWindow->IsOpen.load();
+    if (!ours) {
+        RestoreFreezeOverride();
+        return;
+    }
+    if (main->freezeTime) {
+        // Framework has frozen for our window. Remember its value once, then hold time running.
+        if (!g_FreezeOverridden.load()) {
+            g_FreezeSaved.store(true);
+            g_FreezeOverridden.store(true);
+        }
+        main->freezeTime = false;
+    }
+}
 
 static long long RestartNoticeNowMs() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -1253,6 +1347,8 @@ static void SaveButtonOrder() {
         outfile << "EnableOriginalMF = " << (g_UnblockMF.load() ? 1 : 0) << "\n";
         outfile << "EnableLogging = " << (g_LoggingEnabled.load() ? 1 : 0) << "\n";
         outfile << "EnableFileChangeLog = " << (g_FileChangeLogEnabled.load() ? 1 : 0) << "\n";
+        outfile << "AllowOpenInConsole = " << (g_AllowOpenInConsole.load() ? 1 : 0) << "\n";
+        outfile << "KeepGameRunning = " << (g_KeepGameRunning.load() ? 1 : 0) << "\n";
         outfile << "RememberSubView = " << (g_RememberSubView.load() ? 1 : 0) << "\n";
         outfile << "EnableOriginalCSEditor = " << (g_UnblockCSEditor.load() ? 1 : 0) << "\n";
         outfile << "EnableOriginalCSOverlay = " << (g_UnblockCSOverlay.load() ? 1 : 0) << "\n";
@@ -1357,6 +1453,10 @@ static void LoadButtonOrder() {
                     try { g_LoggingEnabled.store(std::stoi(val) != 0); } catch (...) {}
                 } else if (key == "ENABLEFILECHANGELOG") {
                     try { g_FileChangeLogEnabled.store(std::stoi(val) != 0); } catch (...) {}
+                } else if (key == "ALLOWOPENINCONSOLE") {
+                    try { g_AllowOpenInConsole.store(std::stoi(val) != 0); } catch (...) {}
+                } else if (key == "KEEPGAMERUNNING") {
+                    try { g_KeepGameRunning.store(std::stoi(val) != 0); } catch (...) {}
                 } else if (key == "REMEMBERSUBVIEW") {
                     try { g_RememberSubView.store(std::stoi(val) != 0); } catch (...) {}
                 } else if (key == "ENABLEORIGINALCSEDITOR") {
@@ -1516,6 +1616,7 @@ static void TryHookModSinks();
 static void TryHookCatMenuNativeKey();
 static FLICKInterface* GetFLICKInterface();
 static bool IsENBOpeningTransition();
+static bool DispatchKeyToCSSink(WORD dik);
 static void CloseActiveModMenu(ActiveMenu active);
 static void OpenAnimationReplacer();
 static void OpenImmersiveEquipmentDisplays();
@@ -1820,6 +1921,8 @@ static bool IsENBOpeningTransition() {
 }
 
 static void CloseActiveModMenu(ActiveMenu active) {
+    SKSE::log::info("CloseActiveModMenu: active={}, console={}.",
+        static_cast<int>(active), IsConsoleOpen() ? "OPEN" : "closed");
     if (active == ActiveMenu::OAR) {
         if (SetOAROpen(false)) {
             SKSE::log::info("CloseActiveModMenu: closed OAR directly.");
@@ -1937,17 +2040,23 @@ static void CloseActiveModMenu(ActiveMenu active) {
         SKSE::log::info("CloseActiveModMenu: toggled KreatE closed with {}.", NameFromDIK(g_KreatEConfig.toggleDIK));
     } else if (active == ActiveMenu::CS) {
         const int sub = g_ActiveCSSub.load();
-        if (sub == 1) {
+        if (IsConsoleOpen()) {
+            // With the console open, CS's toggle key won't close it, but Escape does (the user confirmed
+            // Escape closes both the Main Menu and the Editor). So F1 just simulates Escape here.
+            SimulateModifiedKey(0, kEscapeDIK);
+            SKSE::log::info("CloseActiveModMenu: closing Community Shaders sub {} via simulated Escape (console open).", sub);
+        } else if (sub == 1) {
             // The CS Editor's own close command is Escape.
             SimulateModifiedKey(0, kEscapeDIK);
+            SKSE::log::info("CloseActiveModMenu: closing Community Shaders sub {} via engine key event.", sub);
         } else {
             g_AllowCSOpen.store(true);
             g_AllowCSOpenUntilMs.store(NowMs() + 1000);
             ArmCSKeyPass(0);
             InjectEngineKey(g_CSConfig.toggleDIK);
+            SKSE::log::info("CloseActiveModMenu: closing Community Shaders sub {} via engine key event.", sub);
         }
         g_ActiveCSSub.store(0);
-        SKSE::log::info("CloseActiveModMenu: closing Community Shaders sub {} via engine key event.", sub);
     } else if (active == ActiveMenu::PartySheet) {
         // Party Sheet consumes Escape internally for all four modal surfaces. Dispatch it only
         // to Party Sheet so closing from F1 cannot open Skyrim's pause menu.
@@ -2029,7 +2138,7 @@ static void ToggleLauncher() {
         SKSE::log::info("ToggleLauncher: ignored while the restart notice is visible.");
         return;
     }
-    if (IsUserTyping()) {
+    if (IsLauncherTypingBlocked()) {
         SKSE::log::info("ToggleLauncher: hotkey pressed but nothing launched (user is typing).");
         return;
     }
@@ -2074,8 +2183,8 @@ static void ToggleLauncher() {
     } else if (g_LauncherWindow) {
         ForceCloseSKSEMenuFramework();
         g_LauncherWindow->IsOpen.store(true);
-        g_LauncherWindow->BlockUserInput.store(true);
-        SKSE::log::info("ToggleLauncher: Launcher opened.");
+        g_LauncherWindow->BlockUserInput.store(true); // keep the cursor + mouse capture; freeze handled separately
+        SKSE::log::info("ToggleLauncher: Launcher opened (keepRunning={}).", g_KeepGameRunning.load());
     } else {
         SKSE::log::info("ToggleLauncher: hotkey pressed but nothing launched (no launcher window).");
     }
@@ -2152,8 +2261,8 @@ static LRESULT CALLBACK HookedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
                                     if (g_LauncherWindow) {
                                         ForceCloseSKSEMenuFramework();
                                         g_LauncherWindow->IsOpen.store(true);
-                                        g_LauncherWindow->BlockUserInput.store(true);
-                                        SKSE::log::info("WndProc: Launcher opened.");
+                                        g_LauncherWindow->BlockUserInput.store(true); // keep the cursor + mouse capture; freeze handled separately
+                                        SKSE::log::info("WndProc: Launcher opened (keepRunning={}).", g_KeepGameRunning.load());
                                     }
                                 }
                             }
@@ -2457,6 +2566,10 @@ static void HookedKbProcess(RE::BSWin32KeyboardDevice* self, float a_dt) {
     if (!self) return;
     const long long now = NowMs();
 
+    UpdateTimeFreeze(); // pause/unpause time to match our UI, if the option is on
+
+
+
     if (const int request = g_DirectSinkToggleRequest.exchange(0); request > 0) {
         if (!DispatchManagedSinkToggle(request - 1)) {
             if (g_DirectSinkToggleRetries.fetch_sub(1) > 1) {
@@ -2477,7 +2590,7 @@ static void HookedKbProcess(RE::BSWin32KeyboardDevice* self, float a_dt) {
     {
         static bool s_sawCursorForActive = false;
         const auto am = g_ActiveMenu.load();
-        if (am == ActiveMenu::None || am == ActiveMenu::ReShade) {
+        if (am == ActiveMenu::None || MenuIgnoresOSCursor(am)) {
             s_sawCursorForActive = false;
         } else if (IsCursorShowing()) {
             s_sawCursorForActive = true;
@@ -3548,7 +3661,9 @@ static RE::BSEventNotifyControl FilterDispatchPartySheet(RE::BSTEventSink<RE::In
 // call, then restore the list so Skyrim and every other mod still receive the same events.
 using CSProcessInputEvents_t = void(*)(void*, RE::InputEvent* const*);
 static CSProcessInputEvents_t g_OrigCSProcessInputEvents = nullptr;
+static std::atomic<void*> g_CSMenuLast{ nullptr }; // last-seen CS menu ptr, for direct-close injection
 static void HookedCSProcessInputEvents(void* menu, RE::InputEvent* const* a_event) {
+    g_CSMenuLast.store(menu);
     if (!a_event || !*a_event) {
         g_OrigCSProcessInputEvents(menu, a_event);
         return;
@@ -3649,6 +3764,27 @@ static bool DispatchManagedSinkToggle(int whichValue) {
         return true;
     }
     return false;
+}
+
+// Close/toggle Community Shaders by feeding a key straight into its private input processor
+// (g_OrigCSProcessInputEvents), using the last-seen CS menu pointer. This is where CS actually reads
+// its toggle, and it bypasses the engine input stream — needed while the console is open, since the
+// console captures engine input so a normal InjectEngineKey never reaches CS. One tap = down + up.
+static bool DispatchKeyToCSSink(WORD dik) {
+    if (dik == 0 || !g_OrigCSProcessInputEvents) return false;
+    void* menu = g_CSMenuLast.load();
+    if (!menu) return false;
+    const auto send = [&](float value, float heldSecs) {
+        auto* key = RE::ButtonEvent::Create(RE::INPUT_DEVICE::kKeyboard, RE::BSFixedString(), dik, value, heldSecs);
+        if (!key) return;
+        RE::InputEvent* head = key;
+        g_OrigCSProcessInputEvents(menu, &head);
+        key->~ButtonEvent();
+        RE::free(key);
+    };
+    send(1.0f, 0.0f);   // key down
+    send(0.0f, 0.12f);  // key up
+    return true;
 }
 
 static bool DispatchPartySheetKey(WORD dik) {
@@ -4036,6 +4172,9 @@ static std::atomic<bool> g_KeepLauncherOpenForSync{ false };
 
 static void CloseLauncher(bool external) {
     if (g_KeepLauncherOpenForSync.load()) return; // Settings sync button — keep the launcher open
+    // Hand freezeTime back to the framework exactly as it set it (frozen), immediately on close, so our
+    // "keep running" override never bleeds into the next framework window (e.g. the SKSE MF menu).
+    RestoreFreezeOverride();
     if (g_LauncherWindow) {
         g_LauncherWindow->IsOpen.store(false);
         g_WaitForLauncherKeyRelease.store(false);
@@ -5432,6 +5571,7 @@ static void LogStartupDiagnostics() {
 // Launcher render
 // ============================================================================
 static void __stdcall RenderLauncher() {
+    UpdateTimeFreeze(); // clear the framework's freeze here (runs every frame it draws us, even with input blocked)
     if (g_ConfigRestartRequired.load()) {
         long long started = g_RestartNoticeStartedMs.load();
         if (started == 0) {
@@ -5446,7 +5586,8 @@ static void __stdcall RenderLauncher() {
             return;
         }
     }
-    if (g_ActiveMenu.load() != ActiveMenu::None && !IsCursorShowing()) {
+    if (const auto amHeal = g_ActiveMenu.load();
+        amHeal != ActiveMenu::None && !MenuIgnoresOSCursor(amHeal) && !IsCursorShowing()) {
         g_ActiveMenu.store(ActiveMenu::None);
         SKSE::log::info("RenderLauncher: Self-healed active menu state to None (cursor hidden).");
     }
@@ -5762,11 +5903,19 @@ static void __stdcall RenderLauncher() {
                         color, button.name.c_str());
                 };
 
+                const bool consoleOpen = IsConsoleOpen();
                 auto DrawButton = [&](size_t i) {
                     bool disabled = (buttons[i].id == "DebugMenu" ||
                                      buttons[i].id == "IED" ||
                                      buttons[i].id == "ENB" ||
                                      buttons[i].id == "PartySheet") && !IsGameLoaded();
+                    // These menus can't be driven while the console is open, so grey them out then.
+                    if (consoleOpen && (buttons[i].id == "IED" || buttons[i].id == "DebugMenu" ||
+                                        buttons[i].id == "ImprovedCamera" || buttons[i].id == "KreatE" ||
+                                        buttons[i].id == "PartySheet" || buttons[i].id == "CatMenu" ||
+                                        buttons[i].id == "Dragonborn")) {
+                        disabled = true;
+                    }
 
                     if (disabled) {
                         ImGuiMCP::PushStyleVar(ImGuiMCP::ImGuiStyleVar_Alpha, 0.4f);
@@ -6350,6 +6499,20 @@ static void __stdcall RenderLauncher() {
                     SaveButtonOrder();
                 }
                 ImGuiMCP::SetItemTooltip("When on, a mod's sub-menu (e.g. Community Shaders) stays open after you\nclose and reopen the launcher, until you press Back.");
+
+                bool consoleVal = g_AllowOpenInConsole.load();
+                if (ImGuiMCP::Checkbox("Can open menu while console is open", &consoleVal)) {
+                    g_AllowOpenInConsole.store(consoleVal);
+                    SaveButtonOrder();
+                }
+                ImGuiMCP::SetItemTooltip("Open the launcher while the console is up. Use the mouse to navigate.");
+
+                bool keepRunningVal = g_KeepGameRunning.load();
+                if (ImGuiMCP::Checkbox("Keep the game running while menu is open", &keepRunningVal)) {
+                    g_KeepGameRunning.store(keepRunningVal);
+                    SaveButtonOrder();
+                }
+                ImGuiMCP::SetItemTooltip("Keep the world moving (animations, fire) instead of pausing.");
             }
 
             SectionHeader("Maintenance");
@@ -6576,9 +6739,22 @@ static void ManageDMenuKey() {
 // Debug Menu's hotkey defaults to F1 — the same as our launcher key — which can't be told
 // apart when simulating. If they collide, move Debug Menu to a free function key by editing
 // its MCM config (uOpenMenuHotkey), the same managed-write approach used for dMenu.
+static nlohmann::json GetOriginal(const std::string& id);
 static void ManageDebugMenuKey() {
     if (!g_DebugMenuConfig.enabled) return;
-    if (g_DebugMenuConfig.toggleDIK == 0 || g_DebugMenuConfig.toggleDIK != g_LauncherHotkeyDIK.load()) return; // no collision with launcher
+    const WORD cur = g_DebugMenuConfig.toggleDIK;
+    if (cur == 0) return;
+    const WORD launcher = g_LauncherHotkeyDIK.load();
+    // Debug Menu has no open API, so the launcher opens it by SIMULATING its key. Relocate when it
+    // collides with the launcher key, OR when it is sitting on a legacy PRESSABLE relocation key we
+    // assigned in an older build (F2-F8) that was NOT the user's own value - those clash with popular
+    // mods (e.g. PPA uses F2). It is re-parked onto an UNPRESSABLE F17/F20 that no real key can hit,
+    // so opening Debug Menu no longer injects a key any other mod can react to.
+    const bool legacyPressableReloc = (cur == 0x3C || cur == 0x3D || cur == 0x3E || cur == 0x40 || cur == 0x42);
+    const nlohmann::json origJ = GetOriginal("DebugMenu.uOpenMenuHotkey");
+    const int origKey = origJ.is_number_integer() ? origJ.get<int>() : -1;
+    const bool ourReloc = legacyPressableReloc && static_cast<int>(cur) != origKey; // a key WE assigned
+    if (cur != launcher && !ourReloc) return; // no launcher collision and not one of our old keys
 
     // Match LoadDebugMenuConfig's precedence so we edit the file Debug Menu will consume.
     std::filesystem::path settingsIni = "Data/MCM/Settings/DebugMenu.ini";
@@ -6598,8 +6774,10 @@ static void ManageDebugMenuKey() {
         if (g_MFConfig.toggleDIK != 0      && dik == g_MFConfig.toggleDIK)             return true;
         return false;
     };
-    // Avoid F5 (quicksave) and F9 (quickload); F7 is FLICK.
-    const WORD candidates[] = { 0x3C /*F2*/, 0x3D /*F3*/, 0x3E /*F4*/, 0x40 /*F6*/, 0x42 /*F8*/ };
+    // Prefer UNPRESSABLE F13-F24 keys - no physical key can hit them, so they cannot clash with any
+    // other mod's hotkey. F17 and F20 are free in that pool. Pressable keys are a last resort only.
+    // (F2 removed: it clashes with popular mods like PPA. Also avoids F5 quicksave, F9 quickload, F7 FLICK.)
+    const WORD candidates[] = { 0x68 /*F17*/, 0x6B /*F20*/, 0x3D /*F3*/, 0x3E /*F4*/, 0x40 /*F6*/, 0x42 /*F8*/ };
     WORD freeKey = 0;
     for (WORD c : candidates) if (!used(c)) { freeKey = c; break; }
     if (freeKey == 0) { SKSE::log::warn("ManageDebugMenuKey: no free key available."); return; }
@@ -7226,15 +7404,16 @@ static void CaptureOriginalHotkeys() {
             SKSE::log::warn("HotkeyBackup: SKIP ReShade.KeyOverlay = {} (our relocation/disabled value).", s);
         else CaptureOriginal("ReShade.KeyOverlay", ov);
     }
-    // Debug Menu (uOpenMenuHotkey, DIK). Only relocated on a launcher-key collision, to a free
-    // F-key from {F2,F3,F4,F6,F8}; skip those so we don't record a relocation as the original.
+    // Debug Menu (uOpenMenuHotkey, DIK). Relocated on a launcher-key collision to an unpressable
+    // F17/F20 (older builds used a pressable F2-F8). A value equal to any of our relocation keys is
+    // never a real user setting, so never record it as the original (unconditional, like IED/MF).
     {
         std::filesystem::path dm = "Data/MCM/Settings/DebugMenu.ini";
         if (!std::filesystem::exists(dm)) dm = "Data/MCM/Config/DebugMenu/settings.ini";
         if (auto v = ReadIniInt(dm, "uOpenMenuHotkey"); v.is_number_integer()) {
             const int iv = v.get<int>();
-            if (legacyRelocations && (iv == 0x3C || iv == 0x3D || iv == 0x3E || iv == 0x40 || iv == 0x42))
-                SKSE::log::warn("HotkeyBackup: SKIP DebugMenu.uOpenMenuHotkey = {} (our relocation F-key).", iv);
+            if (iv == 0x3C || iv == 0x3D || iv == 0x3E || iv == 0x40 || iv == 0x42 || iv == 0x68 || iv == 0x6B)
+                SKSE::log::warn("HotkeyBackup: SKIP DebugMenu.uOpenMenuHotkey = {} (our relocation F-key, not a real original).", iv);
             else CaptureOriginal("DebugMenu.uOpenMenuHotkey", v);
         }
     }
@@ -7689,7 +7868,7 @@ static void MessageHandler(SKSE::MessagingInterface::Message* msg) {
 // Plugin entry point
 // ============================================================================
 SKSEPluginInfo(
-    .Version              = REL::Version{ 1, 5, 3, 0 },
+    .Version              = REL::Version{ 1, 5, 4, 0 },
     .Name                 = "RisaAllInOneMenu",
     .Author               = "Risa",
     .SupportEmail         = "",
