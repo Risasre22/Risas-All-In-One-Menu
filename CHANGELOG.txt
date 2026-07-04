@@ -4,8 +4,8 @@ Newest first. "In progress" = built/deployed locally but not yet released.
 Claude keeps this file up to date automatically as changes are made.
 
 
-1.5.4  (in progress)
---------------------
+1.5.4
+-----
 New:
 - "Keep the game running while menu is open" option (Settings, off by default).
   By default menus pause the game; turn this on to keep the world moving
