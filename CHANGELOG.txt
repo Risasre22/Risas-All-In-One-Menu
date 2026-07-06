@@ -7,34 +7,34 @@ Claude keeps this file up to date automatically as changes are made.
 1.5.4
 -----
 New:
-- "Keep the game running while menu is open" option (Settings, off by default).
-  By default menus pause the game; turn this on to keep the world moving
-  (animations, fire, NPCs) while a menu is open.
-- "Can open menu while console is open" option (Settings, off by default). Lets the
-  launcher open while the console is up, so menus can be edited with time stopped
-  (navigate with the mouse - the console keeps the keyboard).
-- While the console is open, menus that can't be driven from it (IED, Debug Menu,
-  Improved Camera, KreatE, Skyrim Party Sheet, CatMenu, Dragonborn's Toolkit) are
-  greyed out in the launcher.
+- Added a SearchUI button that opens SearchUI's own search from the launcher. Set live through SearchUI's own function - no ini edit, no extra plugin, no patch. (Tab Closes, couldnt get f1/esc to work yet but maybe ill leave it that way)
+- Mod Configuration Menu button added can rebind the key in settings.
+- Added Exclusions Tab: Exclude mods from being managed by mine,  detailed file and modifier remapping descriptions to the Exclusions confirmation preview along with a Copy Info clipboard button to easily copy configuration details.
+- Integrated with SKSE Menu Framework's new API (SetHotkeyEnabled) to toggle its hotkey live and keylessly, completely eliminating SKSEMenuFramework.ini edits, backup capturing, and restart requirements for it.
+- Added keyboard (⌨) icon buttons to settings rows to open the Advanced Bindings popup (modifiers, double press, hold, and defaults).
+- Added key rebinding convenience directly inside the Advanced Bindings popup.
+- Prepend info circle (🛈) to launcher window title, showing a comprehensive menu help tooltip when hovering over the title bar.
+- Added a 3-second timeout for hotkey capture fields so that they automatically return to normal if no key is pressed.
 
 Fixed:
-- KreatE (and other menus that hide the cursor) could get out of sync - the
-  launcher lost track of them and F1 re-opened instead of closing, sometimes with
-  a hitch on the first open. No longer uses cursor visibility to tell if those
-  menus are open.
-- Debug Menu now relocates to an unpressable F17 instead of F2, so it no longer
-  clashes with popular mods that use F2 (e.g. PPA). Existing F2 installs migrate
-  automatically; still restored to F1 on uninstall.
-- "Restore for uninstall" no longer falsely reports "incomplete" when a supported
-  mod's config simply didn't contain a key it manages; it only reports a genuine
-  write failure now.
-- Community Shaders (both the Main Menu and the Editor) now close with F1 while the
-  console is open. F1 simply simulates Escape, which is what closes either CS window
-  while the console is up.
-- "Keep the game running" now clears the freeze from the render callback instead of
-  the keyboard hook. The framework suppresses the keyboard hook while a menu is open,
-  which is why the option did nothing before; the render callback runs every frame the
-  menu is drawn, so the world keeps moving without disturbing the mouse cursor.
+- dMenu is now managed only through the dMenu NG v2 API (keyless, live). Dropped all stock/older dMenu support that edited dmenu.ini: no ini writes, no capture/restore, no F14 relocation, no restart. If the API build isn't present, dMenu is simply left alone. Nothing to undo on uninstall.
+- ReShade overlay key now returns to Home on restore and stays clean. Risa stops re-managing ReShade.ini once a restore runs, and writes a clean "KeyOverlay=36,0,0,0" directly to the ini. (During normal play the key still reads as disabled/0 on purpose, since the launcher opens ReShade through its add-on.)
+- ReShade support is now add-on only. The included/supported path uses ReShade's add-on API (key disabled, overlay opened programmatically, Home + F22 freed). The old non-add-on fallback that relocated the overlay key to F22 has been removed; a compatibility/non-add-on ReShade is left completely unmanaged. F22 is now a free slot.
+- "Keep the game running while menu is open" option (Settings, off by default).
+- "Can open menu while console is open" option (Settings, off by default).
+- While the console is open, menus that can't be driven from it (IED, Debug Menu, Improved Camera, KreatE, Skyrim Party Sheet, CatMenu, Dragonborn's Toolkit) are greyed out in the launcher.
+- Debug Menu now relocates to an unpressable F17 instead of F2 automatically; still restored to F1 on uninstall.
+- "Restore for uninstall" no longer falsely reports "incomplete" when a supported mod's config simply didn't contain a key it manages
+- MCM button now appears at the main menu too (greyed until a save loads); it was hidden there because the old check only saw SkyUI once a save was loaded.
+- Settings tab: disabled and darkened only the hotkey change buttons and checkboxes for excluded mods, keeping the mod name toggle buttons active and clickable.
+- Settings and Exclusions tab: enabled full controller D-pad and keyboard navigation for Settings and Exclusions scroll views by removing the NoNav flag.
+- Exclusions tab: renamed the hotkey column to "Current Hotkey" and made it display the active user-configured hotkey if the mod is managed, and the native hotkey if it is excluded.
+- Simplified and polished all settings descriptions and hover tooltips for better clarity and screen readability.
+
+
+Internal:
+- Rebuilt against CommonLibSSE-NG fork (alandtse/CommonLibVR,
+  ng branch) for newer runtime offsets and fixes. SE/AE only; VR left off (might support later)
 
 
 1.5.3

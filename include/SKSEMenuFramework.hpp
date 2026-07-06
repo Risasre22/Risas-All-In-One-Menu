@@ -157,6 +157,14 @@ namespace SKSEMenuFramework {
         return nullptr;
     }
 
+    using SetHotkeyEnabledFunction = void (*)(bool enabled);
+    inline void SetHotkeyEnabled(bool enabled) {
+        static auto func = Model::Internal::GetFunction<SetHotkeyEnabledFunction>("SetHotkeyEnabled");
+        if (func) {
+            func(enabled);
+        }
+    }
+
     inline void SetSection(std::string key) { Model::Internal::key = key; }
 }
 

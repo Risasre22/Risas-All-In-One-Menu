@@ -33,10 +33,21 @@ set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(SKSE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 
 include(FetchContent)
+# alandtse/CommonLibVR (ng branch) is the actively maintained CommonLibSSE-NG fork: newer address
+# library offsets for the latest AE runtimes plus accumulated fixes. It keeps the same
+# CommonLibSSE::CommonLibSSE target, so nothing else in this file changes.
+#
+# Target SE/AE only. VR is disabled so the build isn't a "cross-VR" one: with VR on, direct device
+# members (e.g. BSWin32KeyboardDevice::curState) are hidden behind GetRuntimeData() accessors. This
+# mod integrates with SE/AE-only mods and never targets VR, so keeping VR off preserves our existing
+# direct-member input code unchanged.
+set(ENABLE_SKYRIM_SE ON  CACHE BOOL "" FORCE)
+set(ENABLE_SKYRIM_AE ON  CACHE BOOL "" FORCE)
+set(ENABLE_SKYRIM_VR OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(
     CommonLibSSE
-    GIT_REPOSITORY https://github.com/CharmedBaryon/CommonLibSSE-NG.git
-    GIT_TAG b93280e832f263dbef44e44cbe2936622a02f91a
+    GIT_REPOSITORY https://github.com/alandtse/CommonLibVR.git
+    GIT_TAG bebf622adb93624a53a5b39bba410565d832b15e # ng branch
 )
 FetchContent_MakeAvailable(CommonLibSSE)
 
