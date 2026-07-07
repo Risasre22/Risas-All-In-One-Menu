@@ -7,34 +7,34 @@ Claude keeps this file up to date automatically as changes are made.
 1.5.4
 -----
 New:
-- Added a SearchUI button that opens SearchUI's own search from the launcher. Set live through SearchUI's own function - no ini edit, no extra plugin, no patch. (Tab Closes, couldnt get f1/esc to work yet but maybe ill leave it that way)
-- Mod Configuration Menu button added can rebind the key in settings.
-- Added Exclusions Tab: Exclude mods from being managed by mine,  detailed file and modifier remapping descriptions to the Exclusions confirmation preview along with a Copy Info clipboard button to easily copy configuration details.
-- Integrated with SKSE Menu Framework's new API (SetHotkeyEnabled) to toggle its hotkey live and keylessly, completely eliminating SKSEMenuFramework.ini edits, backup capturing, and restart requirements for it.
-- Added keyboard (⌨) icon buttons to settings rows to open the Advanced Bindings popup (modifiers, double press, hold, and defaults).
-- Added key rebinding convenience directly inside the Advanced Bindings popup.
-- Prepend info circle (🛈) to launcher window title, showing a comprehensive menu help tooltip when hovering over the title bar.
-- Added a 3-second timeout for hotkey capture fields so that they automatically return to normal if no key is pressed.
+- Added a Support for SearchUI.
+- Added Support for Quick Armor Rebalance
+- Added a Mod Configuration Menu (MCM) button. You can pick its hotkey in Settings.
+- Added an Exclusions tab: turn off my management for most mods so it keeps its own hotkey.
+- SKSE Menu Framework is now handled through its own built-in switch instead of editing its settings file.
+- Every setting row now has a small keyboard button that opens the Advanced Bindings popup (modifiers, double-tap, hold, and reset to default). GREEN means its not default.
+- The menu title now has an info circle - click it for a full help tooltip (needs work still).
+- Key-binding boxes now give up after 3 seconds if you don't press anything, so you can't get stuck waiting.
+- Changed the boxes to toggles it looks better
+- Added a "Keep the game running while the menu is open" option (Settings, off by default).
+- Added a "Let the menu open while the console is open" option (Settings, off by default).
 
 Fixed:
-- dMenu is now managed only through the dMenu NG v2 API (keyless, live). Dropped all stock/older dMenu support that edited dmenu.ini: no ini writes, no capture/restore, no F14 relocation, no restart. If the API build isn't present, dMenu is simply left alone. Nothing to undo on uninstall.
-- ReShade overlay key now returns to Home on restore and stays clean. Risa stops re-managing ReShade.ini once a restore runs, and writes a clean "KeyOverlay=36,0,0,0" directly to the ini. (During normal play the key still reads as disabled/0 on purpose, since the launcher opens ReShade through its add-on.)
-- ReShade support is now add-on only. The included/supported path uses ReShade's add-on API (key disabled, overlay opened programmatically, Home + F22 freed). The old non-add-on fallback that relocated the overlay key to F22 has been removed; a compatibility/non-add-on ReShade is left completely unmanaged. F22 is now a free slot.
-- "Keep the game running while menu is open" option (Settings, off by default).
-- "Can open menu while console is open" option (Settings, off by default).
-- While the console is open, menus that can't be driven from it (IED, Debug Menu, Improved Camera, KreatE, Skyrim Party Sheet, CatMenu, Dragonborn's Toolkit) are greyed out in the launcher.
-- Debug Menu now relocates to an unpressable F17 instead of F2 automatically; still restored to F1 on uninstall.
-- "Restore for uninstall" no longer falsely reports "incomplete" when a supported mod's config simply didn't contain a key it manages
-- MCM button now appears at the main menu too (greyed until a save loads); it was hidden there because the old check only saw SkyUI once a save was loaded.
-- Settings tab: disabled and darkened only the hotkey change buttons and checkboxes for excluded mods, keeping the mod name toggle buttons active and clickable.
-- Settings and Exclusions tab: enabled full controller D-pad and keyboard navigation for Settings and Exclusions scroll views by removing the NoNav flag.
-- Exclusions tab: renamed the hotkey column to "Current Hotkey" and made it display the active user-configured hotkey if the mod is managed, and the native hotkey if it is excluded.
-- Simplified and polished all settings descriptions and hover tooltips for better clarity and screen readability.
+- dMenu NG (Risa Version) now the only one supported.
+- ReShade's overlay key now goes back to Home properly after a restore.
+- SearchUI: removed my Esc/F1 close for it, since SearchUI already closes with its own built-in Tab key (will look into it more later to be able to close with set menu key and esc i legitmately couldnt get it to work)
+- While the console is open, menus that can't be used from it (IED, Debug Menu, Improved Camera, KreatE, Skyrim Party Sheet, CatMenu, Dragonborn's Toolkit) are greyed out.
+- Fixed the Debug Menu button not opening the menu at all (only closes on menu key not ESC yet)
+- "Restore for uninstall" no longer wrongly says "incomplete" when a mod's config simply didn't have a key it manages.
+- The MCM button now shows at the main menu too (greyed until a save loads); before, it only appeared after a save was loaded.
+- In Settings, excluded mods now only grey out their hotkey controls - you can still switch the mod's name on and off.
+- Settings and Exclusions lists now work fully with controller D-pad and keyboard navigation.
+- Exclusions tab: the hotkey column now shows your current key when a mod is managed, or its own native key when it's excluded.
+- Cleaned up and simplified all the settings descriptions and tooltips so they're easier to read on screen.
 
 
 Internal:
-- Rebuilt against CommonLibSSE-NG fork (alandtse/CommonLibVR,
-  ng branch) for newer runtime offsets and fixes. SE/AE only; VR left off (might support later)
+- Rebuilt against the actively-maintained CommonLibSSE-NG fork (alandtse/CommonLibVR, ng branch) for newer game-version support and fixes. SE/AE only for now (VR maybe later).
 
 
 1.5.3
