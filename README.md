@@ -6,20 +6,23 @@ Press **F1** by default to open or close the launcher. **Escape** also closes it
 
 ## Supported Menus
 
-- SKSE Menu Framework
-- Open Animation Replacer
-- Immersive Equipment Displays
-- Debug Menu
-- dMenu and dMenu NG
-- Improved Camera SE
-- ENB Editor
-- FLICK
-- KreatE
-- Community Shaders
-- Skyrim Party Sheet
-- Dragonborn's Toolkit
-- CatMenu
-- ReShade
+- [SKSE Menu Framework](https://www.nexusmods.com/skyrimspecialedition/mods/120352)
+- Mod Configuration Menu (MCM)
+- [SearchUI (Get Any Item Instantly)](https://www.nexusmods.com/skyrimspecialedition/mods/101290)
+- [Open Animation Replacer](https://www.nexusmods.com/skyrimspecialedition/mods/92109)
+- [Immersive Equipment Displays](https://www.nexusmods.com/skyrimspecialedition/mods/62001)
+- [Debug Menu](https://www.nexusmods.com/skyrimspecialedition/mods/136456)
+- [dMenu and dMenu NG](https://www.nexusmods.com/skyrimspecialedition/mods/166751)
+- [Improved Camera SE](https://www.nexusmods.com/skyrimspecialedition/mods/93962) / [Improved Camera NG](https://discord.gg/Hr7pRchWcf) *(NG is a Discord link, you can find the file in the updates channel)*
+- [ENB Editor](http://enbdev.com/download_mod_tesskyrimse.html)
+- [FLICK](https://www.nexusmods.com/skyrimspecialedition/mods/181603)
+- [KreatE](https://www.nexusmods.com/skyrimspecialedition/mods/83757)
+- [Community Shaders](https://www.nexusmods.com/skyrimspecialedition/mods/86492)
+- [Skyrim Party Sheet - Player and Follower HUD](https://www.nexusmods.com/skyrimspecialedition/mods/167538)
+- [Dragonborn's Toolkit](https://www.nexusmods.com/skyrimspecialedition/mods/181426)
+- [CatMenu](https://www.nexusmods.com/skyrimspecialedition/mods/65958)
+- [ReShade](https://reshade.me/)
+- [Quick Armor Rebalance](https://www.nexusmods.com/skyrimspecialedition/mods/127967)
 
 Only integrations detected in the current installation are displayed.
 
