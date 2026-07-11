@@ -10,6 +10,11 @@
   color: #e5a93b;
 }
 
+.author-note {
+  color: #2e7d32;
+  font-weight: 700;
+}
+
 .muted {
   color: #8b929b;
 }
