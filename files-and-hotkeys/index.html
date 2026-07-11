@@ -12,8 +12,10 @@
         <meta name="author" content="Risasre22">
       
       
-        <link rel="canonical" href="https://risasre22.github.io/Risas-All-In-One-Menu/uninstall/">
+        <link rel="canonical" href="https://risasre22.github.io/Risas-All-In-One-Menu/files-and-hotkeys/">
       
+      
+        <link rel="prev" href="../integration-ledger/">
       
       
       
@@ -25,7 +27,7 @@
     
     
       
-        <title>Uninstall & Restore - Risa's All In One Menu</title>
+        <title>Files & Hotkeys Edited - Risa's All In One Menu</title>
       
     
     
@@ -78,7 +80,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#uninstall-restore" class="md-skip">
+        <a href="#files-hotkeys-edited" class="md-skip">
           Skip to content
         </a>
       
@@ -112,7 +114,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Uninstall &amp; Restore
+              Files & Hotkeys Edited
             
           </span>
         </div>
@@ -261,9 +263,11 @@
   
   
   
+    
   
-    <li class="md-tabs__item">
-      <a href="../files-and-hotkeys/" class="md-tabs__link">
+  
+    <li class="md-tabs__item md-tabs__item--active">
+      <a href="./" class="md-tabs__link">
         
   
   
@@ -286,6 +290,8 @@
         <div class="md-main__inner md-grid">
           
             
+              
+                
               
               <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
                 <div class="md-sidebar__scrollwrap">
@@ -379,10 +385,19 @@
       
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../files-and-hotkeys/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -398,6 +413,7 @@
   
 
       </a>
+      
     </li>
   
 
@@ -410,7 +426,9 @@
             
             
               
-              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" hidden>
                 <div class="md-sidebar__scrollwrap">
                   <div class="md-sidebar__inner">
                     
@@ -421,58 +439,6 @@
   
     
   
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#before-uninstalling" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Before uninstalling
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#what-restore-touches" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        What restore touches
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#if-restore-reports-incomplete" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        If restore reports "incomplete"
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#fresh-start" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Fresh start
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
   
 </nav>
                   </div>
@@ -486,44 +452,75 @@
               <article class="md-content__inner md-typeset">
                 
                   
+  
+
 
 
   
   
 
 
-<h1 id="uninstall-restore">Uninstall &amp; Restore<a class="headerlink" href="#uninstall-restore" title="Permanent link">&para;</a></h1>
-<p>Because the launcher manages other mods' hotkeys, you should let it <strong>put those hotkeys back</strong> before you remove it. This is a one-click step in the launcher.</p>
-<h2 id="before-uninstalling">Before uninstalling<a class="headerlink" href="#before-uninstalling" title="Permanent link">&para;</a></h2>
-<ol>
-<li>Open the launcher (<strong>F1</strong>) and go to the <strong>Settings</strong> tab.</li>
-<li>
-<p>Choose one of the restore options:</p>
-<ul>
-<li><strong>Restore My Original Settings</strong> — reverts each managed mod to the value it had <strong>before</strong> Risa's Menu first changed it. Missing captured values fall back to the mod's safe default.</li>
-<li><strong>Restore Supported Mod Defaults</strong> — sets each managed mod to its <strong>upstream default</strong> hotkey, ignoring any captured custom value.</li>
-</ul>
-</li>
-<li>
-<p>When restore finishes, choose to <strong>quit to desktop</strong> (or exit Skyrim normally).</p>
-</li>
-<li><strong>Disable or remove</strong> Risa's All In One Menu <em>before</em> launching Skyrim again.</li>
-</ol>
-<p>The restored hotkeys take effect on the next game launch.</p>
-<div class="admonition warning">
-<p class="admonition-title">Disable the mod before relaunching</p>
-<p>If you relaunch Skyrim with the mod still enabled, it will re-apply its hotkey management. Restore → quit → disable the mod → then launch again.</p>
-</div>
-<h2 id="what-restore-touches">What restore touches<a class="headerlink" href="#what-restore-touches" title="Permanent link">&para;</a></h2>
-<p>Restore only rewrites the specific hotkey values the launcher itself changed, in each managed mod's config. Unrelated settings in those files are left alone. Files that don't exist are skipped.</p>
-<h2 id="if-restore-reports-incomplete">If restore reports "incomplete"<a class="headerlink" href="#if-restore-reports-incomplete" title="Permanent link">&para;</a></h2>
-<p>If a restore reports that it was incomplete, it means one config file genuinely couldn't be written (for example it was read-only or locked). Every other mod is still restored, and the originals backup is <strong>kept</strong> so you can fix the cause and run restore again. Check <code>Documents\My Games\Skyrim Special Edition\SKSE\RisaAllInOneMenu.log</code> for the specific file.</p>
-<div class="admonition tip">
-<p class="admonition-title">Audit log</p>
-<p>A second, plain-English log — <code>RisaAllInOneMenu_FileChanges.log</code> — records exactly which config files the mod edits (EDIT) and reverts (REVERT), and nothing else. Both logs can be toggled in the <strong>Settings</strong> tab.</p>
-</div>
-<h2 id="fresh-start">Fresh start<a class="headerlink" href="#fresh-start" title="Permanent link">&para;</a></h2>
-<p>After a successful restore, the originals backup is removed so a future reinstall starts clean and captures your settings fresh.</p>
+<h1 id="files-hotkeys-edited">Files &amp; Hotkeys Edited<a class="headerlink" href="#files-hotkeys-edited" title="Permanent link">&para;</a></h1>
+<p><span class="muted">"Default" is your original value (what Risa restores). "Changed to" is what Risa sets while installed. Original values captured before relocation are restored whenever possible, and the defaults below are the fallback used only if your original wasn't captured.</span></p>
+<p><span class="gold">Keys freed for you:</span> <span class="muted">Home (dMenu), Backspace (IED), Shift + Home (Improved Camera), F7 (FLICK), and F1 (Debug Menu, when it relocates to an unpressable F17).</span></p>
+<details class="files-edited">
+<summary>Show every file and value Risa edits</summary>
+<p><strong class="blue">Open Animation Replacer</strong><br>
+<span class="gold">Path:</span> SKSE\Plugins\OpenAnimationReplacer.ini<br>
+<span class="gold">Default key:</span> Shift + O<br>
+<span class="gold">Default values:</span> uToggleUIKey = 24 | uToggleUIKeyShift = 1 | uToggleUIKeyCtrl = 0 | uToggleUIKeyAlt = 0<br>
+<span class="gold">Changed to:</span> uToggleUIKey = F13 (unpressable)</p>
+<p><strong class="blue">Improved Camera SE</strong> <span class="muted">(Discord version requires no .ini edits)</span><br>
+<span class="gold">Path:</span> SKSE\Plugins\ImprovedCameraSE\ImprovedCameraSE.ini<br>
+<span class="gold">Default key:</span> Left Shift + Home<br>
+<span class="gold">Default value:</span> MenuKey = 0x24<br>
+<span class="gold">Changed to:</span> Not relocated. The key stays Home and is hidden only from Improved Camera, so Shift + Home is free for everything else.</p>
+<p><strong class="blue">Immersive Equipment Displays</strong><br>
+<span class="gold">Path:</span> SKSE\Plugins\ImmersiveEquipmentDisplays.ini<br>
+<span class="gold">Default key:</span> Backspace<br>
+<span class="gold">Default values:</span> ToggleKeys = 0x0E | OverrideToggleKeys = false<br>
+<span class="gold">Changed to:</span> ToggleKeys = F16 (unpressable) | OverrideToggleKeys = true</p>
+<p><strong class="blue">FLICK</strong><br>
+<span class="gold">Path:</span> FUCKs\FUCK\keybinds_user.ini <span class="muted">(falls back to keybinds.ini if the user file doesn't exist)</span><br>
+<span class="gold">Default key:</span> F7<br>
+<span class="gold">Default value:</span> iToggleFUCK_Key = 65<br>
+<span class="gold">Changed to:</span> iToggleFUCK_Key = F14 (unpressable). FLICK is opened through its own API, so its key just needs to be off a physical key.</p>
+<p><strong class="blue">Debug Menu</strong><br>
+<span class="gold">Path:</span> MCM\Settings\DebugMenu.ini (or MCM\Config\DebugMenu\settings.ini)<br>
+<span class="gold">Default key:</span> F1<br>
+<span class="gold">Default value:</span> uOpenMenuHotkey = 59<br>
+<span class="gold">Changed to:</span> uOpenMenuHotkey = F17 (unpressable). <span class="muted">Only relocated when its key collides with the launcher key or was set by an older Risa build; otherwise it stays on its own key and is freed at the input level with no edit.</span></p>
+<p><strong class="blue">KreatE</strong><br>
+<span class="gold">Path:</span> KreatE\UserSettings.ini<br>
+<span class="gold">Default key:</span> End<br>
+<span class="gold">Default value:</span> GUIToggleKeys = 0x23<br>
+<span class="gold">Changed to:</span> GUIToggleKeys = F18 (unpressable)</p>
+<p><strong class="blue">Community Shaders</strong><br>
+<span class="gold">Path:</span> SKSE\Plugins\CommunityShaders\SettingsUser.json (or SettingsDefault.json)<br>
+<span class="gold">Default keys:</span> End / Shift + End / F10 / Numpad *<br>
+<span class="gold">Default values under "Menu":</span> "ToggleKey": 35 | "CSEditorToggleKey": [16, 35] | "OverlayToggleKey": 121 | "EffectToggleKey": 106<br>
+<span class="gold">Changed to:</span> ToggleKey = F19 | CSEditorToggleKey = F15 | OverlayToggleKey = F23 | EffectToggleKey = F24 (all unpressable)</p>
+<p><strong class="blue">CatMenu</strong><br>
+<span class="gold">Path:</span> SKSE\Plugins\catmenu\settings.json<br>
+<span class="gold">Default key:</span> F6<br>
+<span class="gold">Default value:</span> "toggle_key": 577<br>
+<span class="gold">Changed to:</span> "toggle_key": F21</p>
+<p><strong class="blue">Mod Function Menu</strong><br>
+<span class="gold">Path:</span> SKSE\Plugins\ccld_ModFunctionMenu.toml<br>
+<span class="gold">Default key:</span> F1<br>
+<span class="gold">Default value:</span> [Controls.Keyboard] iHotkey = 59<br>
+<span class="gold">Changed to:</span> iHotkey = F20 (unpressable). <span class="muted">Restart once after installing so it reads the new value.</span></p>
+<p><strong class="blue">Skyrim Cheat Menu (Dragonborn's Toolkit)</strong> <span class="muted">(v0.5+ no longer needs this edit)</span><br>
+<span class="gold">Path:</span> SKSE\Plugins\SkyrimCheatMenu.json<br>
+<span class="gold">Default key:</span> F1<br>
+<span class="gold">Default value:</span> "toggleKey": "F1"<br>
+<span class="gold">Changed to:</span> Nothing on v0.5+ (the hotkey is freed live through the mod's API). <span class="muted">Only older builds get "toggleKey": 0 written as a fallback.</span></p>
+<p><strong class="blue">ReShade</strong><br>
+<span class="gold">Path:</span> ReShade.ini in the game folder<br>
+<span class="gold">Default key:</span> Home<br>
+<span class="gold">Default value:</span> KeyOverlay=36,0,0,0<br>
+<span class="gold">Changed to:</span> KeyOverlay=0,0,0,0 via the ReShade add-on API so Home stays free.</p>
+</details>
 
 
 
@@ -531,8 +528,13 @@
 
 
 
+  
+  
 
 
+
+
+  
 
 
 
