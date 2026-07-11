@@ -1,0 +1,34 @@
+.perfect {
+  color: #e5a93b;
+}
+
+.integration-table {
+  overflow-x: auto;
+  margin: 1.5rem 0;
+}
+
+.integration-table table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.integration-table td {
+  border: 1px solid var(--md-default-fg-color--lightest);
+  padding: 0.75rem 0.9rem;
+  vertical-align: top;
+}
+
+.integration-table td:first-child {
+  white-space: nowrap;
+  width: 1%;
+  text-align: center;
+}
+
+.integration-table td:nth-child(2) {
+  min-width: 15rem;
+  white-space: nowrap;
+}
+
+.integration-table small {
+  opacity: 0.75;
+}

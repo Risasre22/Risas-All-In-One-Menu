@@ -15,10 +15,8 @@
         <link rel="canonical" href="https://risasre22.github.io/Risas-All-In-One-Menu/integration-ledger/">
       
       
-        <link rel="prev" href="../supported-mods/">
+        <link rel="prev" href="..">
       
-      
-        <link rel="next" href="../hotkey-allocation/">
       
       
         
@@ -54,6 +52,8 @@
         <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
       
     
+    
+      <link rel="stylesheet" href="../stylesheets/extra.css">
     
     <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
@@ -244,44 +244,6 @@
   
   
   
-  
-    <li class="md-tabs__item">
-      <a href="../installation/" class="md-tabs__link">
-        
-  
-  
-    
-  
-  Installation
-
-      </a>
-    </li>
-  
-
-      
-        
-  
-  
-  
-  
-    <li class="md-tabs__item">
-      <a href="../supported-mods/" class="md-tabs__link">
-        
-  
-  
-    
-  
-  Supported Mods
-
-      </a>
-    </li>
-  
-
-      
-        
-  
-  
-  
     
   
   
@@ -293,44 +255,6 @@
     
   
   Integration Ledger
-
-      </a>
-    </li>
-  
-
-      
-        
-  
-  
-  
-  
-    <li class="md-tabs__item">
-      <a href="../hotkey-allocation/" class="md-tabs__link">
-        
-  
-  
-    
-  
-  Hotkey Allocation
-
-      </a>
-    </li>
-  
-
-      
-        
-  
-  
-  
-  
-    <li class="md-tabs__item">
-      <a href="../uninstall/" class="md-tabs__link">
-        
-  
-  
-    
-  
-  Uninstall & Restore
 
       </a>
     </li>
@@ -397,60 +321,6 @@
     
   
     Home
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-    
-      
-      
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../installation/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Installation
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-    
-      
-      
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../supported-mods/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Supported Mods
   
 
     
@@ -548,60 +418,6 @@
   
 
     
-      
-      
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../hotkey-allocation/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Hotkey Allocation
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-    
-      
-      
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../uninstall/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Uninstall & Restore
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-    
   </ul>
 </nav>
                   </div>
@@ -663,254 +479,145 @@
 <p>This page shows how Risa integrates each supported menu and how each original hotkey is handled.</p>
 <h2 id="legend">Legend<a class="headerlink" href="#legend" title="Permanent link">&para;</a></h2>
 <ul>
-<li>🟨 <strong>Gold status:</strong> perfect integration</li>
-<li>✅ <strong>Update-resilient integration</strong></li>
-<li>⚠️ <strong>Compatibility update may be needed</strong></li>
-<li>▶️ <strong>Direct open/close through a non-key method</strong></li>
-<li>⌨️ <strong>Key freed live with no file edit</strong></li>
-<li>💾 <strong>Key freed through INI/JSON/config editing</strong></li>
-<li>✏️ <strong>API request pending or historically requested from the original mod author</strong></li>
+<li><span class="perfect">Gold text</span> = perfect integration</li>
+<li>✅ = update-resilient integration</li>
+<li>⚠️ = compatibility update may be needed</li>
+<li>▶️ = direct open/close through a non-key method</li>
+<li>⌨️ = key freed live with no file edit</li>
+<li>💾 = key freed through INI/JSON/config editing</li>
+<li>✏️ = API request pending or historically requested from the original mod author</li>
 </ul>
+<div class="integration-table">
 <table>
-<thead>
-<tr>
-<th>Status</th>
-<th>Open/close</th>
-<th>Key</th>
-<th>Request</th>
-<th>Hotkey</th>
-<th>Mod</th>
-<th>Notes</th>
-</tr>
-</thead>
 <tbody>
 <tr>
-<td>🟨 ✅</td>
-<td>▶️</td>
-<td>⌨️</td>
-<td></td>
-<td></td>
-<td><strong>SKSE Menu Framework</strong></td>
+<td>✅ ▶️ ⌨️</td>
+<td><strong class="perfect">SKSE Menu Framework</strong></td>
 <td>Added hotkey API.</td>
 </tr>
 <tr>
-<td>🟨 ✅</td>
-<td>▶️</td>
-<td>⌨️</td>
-<td></td>
-<td></td>
-<td><strong>Mod Configuration Menu (MCM)</strong></td>
+<td>✅ ▶️ ⌨️</td>
+<td><strong class="perfect">Mod Configuration Menu (MCM)</strong></td>
 <td>Opens directly to SkyUI's configuration panel.</td>
 </tr>
 <tr>
-<td>✅</td>
-<td></td>
-<td>⌨️</td>
-<td>✏️</td>
-<td>F18</td>
-<td>SearchUI</td>
+<td>✅ ⌨️ ✏️</td>
+<td>SearchUI <small>F18</small></td>
 <td>Hotkey managed live through Papyrus; no INI edit.</td>
 </tr>
 <tr>
-<td>⚠️</td>
-<td></td>
-<td>💾</td>
-<td>✏️</td>
-<td>F13</td>
-<td>Open Animation Replacer</td>
+<td>⚠️ 💾 ✏️</td>
+<td>Open Animation Replacer <small>F13</small></td>
 <td>Direct integration is version-dependent; primarily config-managed.</td>
 </tr>
 <tr>
-<td>⚠️</td>
-<td></td>
-<td>💾</td>
-<td>✏️</td>
-<td>F16</td>
-<td>Immersive Equipment Displays 1.7.5b</td>
+<td>⚠️ 💾 ✏️</td>
+<td>Immersive Equipment Displays 1.7.5b <small>F16</small></td>
 <td>Direct integration is version-dependent.</td>
 </tr>
 <tr>
-<td>⚠️</td>
-<td>▶️</td>
-<td>⌨️</td>
-<td></td>
-<td>F4</td>
-<td>Debug Menu</td>
+<td>⚠️ ▶️ ⌨️</td>
+<td>Debug Menu <small>F4</small></td>
 <td>Public API controls the menu and disables its hotkey live.</td>
 </tr>
 <tr>
 <td>⚠️</td>
-<td></td>
-<td></td>
-<td></td>
-<td></td>
 <td>dMenu</td>
 <td>Not supported; use the included edit.</td>
 </tr>
 <tr>
-<td>⚠️</td>
-<td></td>
-<td></td>
-<td>✏️</td>
-<td></td>
+<td>⚠️ ✏️</td>
 <td>dMenu NG</td>
 <td>Not supported; use the included edit.</td>
 </tr>
 <tr>
-<td>🟨 ✅</td>
-<td>▶️</td>
-<td>⌨️</td>
-<td></td>
-<td></td>
-<td><strong>dMenu NG (Risa edit)</strong></td>
+<td>✅ ▶️ ⌨️</td>
+<td><strong class="perfect">dMenu NG (Risa edit)</strong></td>
 <td>Supported API-enabled build.</td>
 </tr>
 <tr>
-<td>⚠️</td>
-<td></td>
-<td>⌨️</td>
-<td></td>
-<td></td>
+<td>⚠️ ⌨️</td>
 <td>Improved Camera SE 1.1.2.4228</td>
 <td>Key freed at the input level; no INI edit or public menu API.</td>
 </tr>
 <tr>
-<td>🟨 ✅</td>
-<td>▶️</td>
-<td>⌨️</td>
-<td></td>
-<td></td>
-<td><strong>Improved Camera NG 2.0.0.1215</strong></td>
+<td>✅ ▶️ ⌨️</td>
+<td><strong class="perfect">Improved Camera NG 2.0.0.1215</strong></td>
 <td>Uses the <code>ic menu</code> command path.</td>
 </tr>
 <tr>
-<td>🟨 ✅</td>
-<td></td>
-<td>⌨️</td>
-<td></td>
-<td></td>
-<td><strong>ENB Editor</strong></td>
+<td>✅ ⌨️</td>
+<td><strong class="perfect">ENB Editor</strong></td>
 <td>Key freed at the input level; no INI edit or public menu API.</td>
 </tr>
 <tr>
-<td>🟨 ✅</td>
-<td>▶️</td>
-<td>⌨️</td>
-<td></td>
-<td></td>
-<td><strong>FLICK</strong></td>
+<td>✅ ▶️ ⌨️</td>
+<td><strong class="perfect">FLICK</strong></td>
 <td>Uses the author's direct API.</td>
 </tr>
 <tr>
-<td>⚠️</td>
-<td></td>
-<td>💾</td>
-<td>✏️</td>
-<td>F18</td>
-<td>KreatE</td>
+<td>⚠️ 💾 ✏️</td>
+<td>KreatE <small>F18</small></td>
 <td>No author response; config-managed integration.</td>
 </tr>
 <tr>
-<td>⚠️</td>
-<td></td>
-<td>💾</td>
-<td>✏️</td>
-<td>F15/F19/F23/F24</td>
-<td>Community Shaders</td>
+<td>⚠️ 💾 ✏️</td>
+<td>Community Shaders <small>F15/F19/F23/F24</small></td>
 <td>API request sent; compatibility depends on the current build.</td>
 </tr>
 <tr>
-<td>🟨 ✅</td>
-<td>▶️</td>
-<td>⌨️</td>
-<td></td>
-<td></td>
-<td><strong>Dragonborn's Toolkit</strong></td>
+<td>✅ ▶️ ⌨️</td>
+<td><strong class="perfect">Dragonborn's Toolkit</strong></td>
 <td>Uses the public Toolkit API for open/close and live hotkey control.</td>
 </tr>
 <tr>
-<td>⚠️</td>
-<td>▶️</td>
-<td>💾</td>
-<td>✏️</td>
-<td>F21</td>
-<td>CatMenu 2.0.1</td>
+<td>⚠️ ▶️ 💾 ✏️</td>
+<td>CatMenu 2.0.1 <small>F21</small></td>
 <td>Direct integration is version-dependent.</td>
 </tr>
 <tr>
-<td>⚠️</td>
-<td>▶️</td>
-<td>💾</td>
-<td></td>
-<td></td>
+<td>⚠️ ▶️ 💾</td>
 <td>ReShade 6.7.3+</td>
 <td>Add-on API opens the overlay; the overlay key is disabled through ReShade.ini.</td>
 </tr>
 <tr>
-<td>⚠️</td>
-<td></td>
-<td></td>
-<td>✏️</td>
-<td></td>
+<td>⚠️ ✏️</td>
 <td>Skyrim Party Sheet</td>
 <td>Blocked by DirectInput/raw input; author may add an API.</td>
 </tr>
 <tr>
-<td>⚠️</td>
-<td>▶️</td>
-<td>⌨️</td>
-<td>✏️</td>
-<td></td>
+<td>⚠️ ▶️ ⌨️ ✏️</td>
 <td>Quick Armor Rebalance</td>
 <td>Opens through Papyrus; close API is still pending.</td>
 </tr>
 <tr>
-<td></td>
-<td>▶️</td>
-<td></td>
-<td>✏️</td>
-<td></td>
+<td>▶️ ✏️</td>
 <td>Modex</td>
 <td>Not yet added; API discussion started.</td>
 </tr>
 <tr>
-<td></td>
-<td>▶️</td>
-<td></td>
-<td>✏️</td>
-<td></td>
+<td>▶️ ✏️</td>
 <td>Hotkey Reminder</td>
 <td>Not yet added; awaiting response.</td>
 </tr>
 <tr>
-<td></td>
-<td></td>
-<td></td>
 <td>✏️</td>
-<td></td>
 <td>Armor &amp; Cloth / Weapon Transmog</td>
 <td>Not yet added; response pending.</td>
 </tr>
 <tr>
-<td>⚠️</td>
-<td></td>
-<td>💾</td>
-<td>✏️</td>
-<td>F20</td>
-<td>Mod Function Menu</td>
+<td>⚠️ 💾 ✏️</td>
+<td>Mod Function Menu <small>F20</small></td>
 <td>Key parked through TOML edit and opened by key injection.</td>
 </tr>
 <tr>
-<td>⚠️</td>
-<td>▶️</td>
-<td>⌨️</td>
-<td>✏️</td>
-<td>Numpad 1</td>
-<td>Outfit Preview Selector</td>
+<td>⚠️ ▶️ ⌨️ ✏️</td>
+<td>Outfit Preview Selector <small>Numpad 1</small></td>
 <td>Opens through the mod event and manages its hotkey live through Papyrus.</td>
 </tr>
 </tbody>
 </table>
+</div>
 
 
 
