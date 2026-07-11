@@ -102,7 +102,7 @@ static void DMenuApiMessageHandler(SKSE::MessagingInterface::Message* msg) {
     SKSE::log::info("dMenu API received via SKSE message (interface v{}).", iface->interfaceVersion);
 }
 
-static constexpr std::string_view kRisaMenuVersion = "1.5.4";
+static constexpr std::string_view kRisaMenuVersion = "1.5.5";
 static std::string g_RuntimeVersion = "Unknown";
 static std::string g_SKSEVersion = "Unknown";
 static std::string g_RuntimeEdition = "Unknown";
@@ -160,6 +160,15 @@ static constexpr KeyEntry kKeyTable[] = {
     { "Q", 0x10, 'Q' }, { "R", 0x13, 'R' }, { "S", 0x1F, 'S' }, { "T", 0x14, 'T' },
     { "U", 0x16, 'U' }, { "V", 0x2F, 'V' }, { "W", 0x11, 'W' }, { "X", 0x2D, 'X' },
     { "Y", 0x15, 'Y' }, { "Z", 0x2C, 'Z' },
+    // Number row (top of keyboard) - named so they're distinct from the numpad below.
+    { "1", 0x02, '1' }, { "2", 0x03, '2' }, { "3", 0x04, '3' }, { "4", 0x05, '4' }, { "5", 0x06, '5' },
+    { "6", 0x07, '6' }, { "7", 0x08, '7' }, { "8", 0x09, '8' }, { "9", 0x0A, '9' }, { "0", 0x0B, '0' },
+    // Numpad - explicit names so "Num 1" never collapses to "1" or "End" (needs Num Lock to bind).
+    { "Num 0", 0x52, VK_NUMPAD0 }, { "Num 1", 0x4F, VK_NUMPAD1 }, { "Num 2", 0x50, VK_NUMPAD2 },
+    { "Num 3", 0x51, VK_NUMPAD3 }, { "Num 4", 0x4B, VK_NUMPAD4 }, { "Num 5", 0x4C, VK_NUMPAD5 },
+    { "Num 6", 0x4D, VK_NUMPAD6 }, { "Num 7", 0x47, VK_NUMPAD7 }, { "Num 8", 0x48, VK_NUMPAD8 },
+    { "Num 9", 0x49, VK_NUMPAD9 }, { "Num *", 0x37, VK_MULTIPLY }, { "Num -", 0x4A, VK_SUBTRACT },
+    { "Num +", 0x4E, VK_ADD }, { "Num .", 0x53, VK_DECIMAL }, { "Num /", 0xB5, VK_DIVIDE },
 };
 
 // ============================================================================
@@ -210,8 +219,10 @@ struct DebugMenuConfig {
     WORD toggleVK = VK_F1;
     // Runtime API — resolved from DebugMenu.dll exports at startup
     using FnSetMenuOpen       = void(*)(bool open);
+    using FnIsMenuOpen        = bool(*)();
     using FnSetHotkeysEnabled = void(*)(bool enabled);
     FnSetMenuOpen       setMenuOpen       = nullptr;
+    FnIsMenuOpen        isMenuOpen        = nullptr;
     FnSetHotkeysEnabled setHotkeysEnabled = nullptr;
 };
 static DebugMenuConfig g_DebugMenuConfig;
@@ -284,6 +295,20 @@ struct CatMenuConfig {
 };
 static CatMenuConfig g_CatMenuConfig;
 
+struct ModFunctionMenuConfig {
+    bool enabled = false;
+    WORD toggleDIK = 0x3B; // F1 (Mod Function Menu's default iHotkey = 59)
+    WORD toggleVK = VK_F1;
+};
+static ModFunctionMenuConfig g_ModFunctionMenuConfig;
+
+struct OPSConfig {
+    bool enabled = false;
+    WORD toggleDIK = 0x4F; // Numpad 1 (Outfit Preview Selector's default Hotkey = 79)
+    WORD toggleVK = VK_NUMPAD1;
+};
+static OPSConfig g_OPSConfig;
+
 struct DragonbornConfig {
     bool enabled = false;
     std::string toggleKeyName = "F1";
@@ -301,13 +326,15 @@ struct ReShadeConfig {
 static ReShadeConfig g_ReShadeConfig;
 
 // Minimal prefix of FLICK's official packed C API (FUCK_API.h). Keeping only the
-// fields through SetMenuOpen/IsMenuOpen avoids depending on FLICK's ImGui types.
+// fields through SetMenuOpen/IsMenuOpen/SetHotkeyEnabled avoids depending on FLICK's ImGui types.
 #pragma pack(push, 1)
 struct FLICKInterface {
     std::uint32_t version;
     void* functionsBeforeSetMenuOpen[12];
     void (*SetMenuOpen)(bool);
     bool (*IsMenuOpen)();
+    void* functionsBeforeSetHotkeyEnabled[200];
+    void (*SetHotkeyEnabled)(bool);
 };
 #pragma pack(pop)
 
@@ -329,7 +356,9 @@ enum class ActiveMenu {
     MCM,
     ReShade,
     SearchUI,
-    QAR
+    QAR,
+    ModFunctionMenu,
+    OPS
 };
 static std::atomic<ActiveMenu> g_ActiveMenu{ ActiveMenu::None };
 static std::atomic<bool> g_OpenMCMWhenJournalReady{ false };
@@ -352,6 +381,7 @@ static bool MenuIgnoresOSCursor(ActiveMenu am) {
         case ActiveMenu::Dragonborn:
         case ActiveMenu::ReShade:
         case ActiveMenu::QAR:
+        case ActiveMenu::ModFunctionMenu:
             return true;
         default:
             return false;
@@ -361,14 +391,17 @@ static bool MenuIgnoresOSCursor(ActiveMenu am) {
 // Launcher sub-view: which mod's "hub" of sub-buttons the Launcher tab is showing.
 // 0 = none (normal button grid), 1 = Community Shaders hub, 2 = Skyrim Party Sheet hub.
 static std::atomic<int> g_LauncherSubView{ 0 };
-static std::atomic<bool> g_RememberSubView{ false };
+static std::atomic<bool> g_RememberSubView{ true };
 static std::atomic<int> g_ActiveCSSub{ 0 };
 static std::atomic<int> g_ActivePartySheetSub{ 0 };
 static std::atomic<std::uint64_t> g_PartyInspectRequest{ 0 };
 static std::atomic<RE::FormID> g_LastPartyInspectActor{ 0 };
 
-static std::atomic<bool> g_ShowExclusionsTab{ false };
+static std::atomic<bool> g_ShowExclusionsTab{ true };
 static std::atomic<bool> g_HideExcludedInLauncher{ false };
+static std::string g_Language = "en";
+static std::map<std::string, std::string> g_Translations;
+static std::map<std::string, std::string> g_EnglishTranslations;
 
 
 
@@ -380,6 +413,250 @@ static std::string TrimStr(const std::string& s) {
 static std::string ToUpper(std::string s) {
     std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c){ return std::toupper(c); });
     return s;
+}
+
+static std::string SanitizeLanguageCode(std::string value) {
+    value = TrimStr(value);
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
+        if (c == '_') return '-';
+        return static_cast<char>(std::tolower(c));
+    });
+    if (value.empty()) return "en";
+    for (const char c : value) {
+        const bool ok = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-';
+        if (!ok) return "en";
+    }
+    return value;
+}
+
+static void FlattenTranslations(const nlohmann::json& node, const std::string& prefix, std::map<std::string, std::string>& out) {
+    if (!node.is_object()) return;
+    for (auto it = node.begin(); it != node.end(); ++it) {
+        const std::string key = prefix.empty() ? it.key() : (prefix + "." + it.key());
+        if (it.value().is_string()) {
+            out[key] = it.value().get<std::string>();
+        } else if (it.value().is_object()) {
+            FlattenTranslations(it.value(), key, out);
+        }
+    }
+}
+
+static std::filesystem::path FindTranslationFile(const std::string& language) {
+    const std::array<std::filesystem::path, 2> paths = {
+        std::filesystem::path("SKSE/Plugins/RisaAllInOneMenu/Translations") / (language + ".json"),
+        std::filesystem::path("Data/SKSE/Plugins/RisaAllInOneMenu/Translations") / (language + ".json")
+    };
+
+    for (const auto& candidate : paths) {
+        if (std::filesystem::exists(candidate)) return candidate;
+    }
+    return {};
+}
+
+static bool TranslationFileExists(const std::string& language) {
+    return !FindTranslationFile(language).empty();
+}
+
+static bool LoadTranslationFile(const std::string& language, std::map<std::string, std::string>& out) {
+    out.clear();
+    const std::filesystem::path path = FindTranslationFile(language);
+    std::ifstream file;
+    if (!path.empty()) {
+        file.open(path);
+    }
+    if (!file.is_open()) {
+        SKSE::log::warn("Translations: {}.json not found in SKSE/Plugins/RisaAllInOneMenu/Translations.", language);
+        return false;
+    }
+    try {
+        nlohmann::json json;
+        file >> json;
+        FlattenTranslations(json, "", out);
+        SKSE::log::info("Translations: loaded {} string(s) from {}.", out.size(), path.string());
+        return true;
+    } catch (const std::exception& e) {
+        SKSE::log::error("Translations: failed to parse {}: {}", path.string(), e.what());
+        out.clear();
+        return false;
+    }
+}
+
+static void LogMissingTranslationKeysForCurrentLanguage() {
+    if (g_Language == "en" || g_EnglishTranslations.empty()) return;
+
+    std::vector<std::string> missingKeys;
+    missingKeys.reserve(g_EnglishTranslations.size());
+    for (const auto& [key, value] : g_EnglishTranslations) {
+        if (g_Translations.find(key) == g_Translations.end()) {
+            missingKeys.push_back(key);
+        }
+    }
+
+    const std::size_t total = g_EnglishTranslations.size();
+    const std::size_t loaded = g_Translations.size();
+    const std::size_t missing = missingKeys.size();
+    if (missing == 0) {
+        SKSE::log::info("Translations: '{}' is complete ({} / {} English string keys present).",
+            g_Language, loaded, total);
+        return;
+    }
+
+    SKSE::log::warn("Translations: '{}' is missing {} of {} English string key(s); missing keys will fall back to English.",
+        g_Language, missing, total);
+
+    constexpr std::size_t kMaxMissingKeysToLog = 40;
+    const std::size_t count = missingKeys.size() < kMaxMissingKeysToLog ? missingKeys.size() : kMaxMissingKeysToLog;
+    for (std::size_t i = 0; i < count; ++i) {
+        SKSE::log::warn("Translations: missing '{}' key: {}", g_Language, missingKeys[i]);
+    }
+    if (missingKeys.size() > kMaxMissingKeysToLog) {
+        SKSE::log::warn("Translations: '{}' has {} additional missing key(s) not listed.",
+            g_Language, missingKeys.size() - kMaxMissingKeysToLog);
+    }
+}
+
+static void LoadTranslations() {
+    g_Language = SanitizeLanguageCode(g_Language);
+    const bool englishLoaded = LoadTranslationFile("en", g_EnglishTranslations);
+    if (!englishLoaded) {
+        SKSE::log::error("Translations: base English file failed to load; missing-key diagnostics are unavailable.");
+    }
+    if (g_Language == "en") {
+        g_Translations.clear();
+        return;
+    }
+    if (!LoadTranslationFile(g_Language, g_Translations)) {
+        SKSE::log::warn("Translations: falling back to English because language '{}' could not be loaded.", g_Language);
+        g_Translations.clear();
+    } else if (englishLoaded) {
+        LogMissingTranslationKeysForCurrentLanguage();
+    }
+}
+
+static const char* Tr(const char* key, const char* fallback) {
+    if (!key || !*key) return fallback ? fallback : "";
+    if (const auto it = g_Translations.find(key); it != g_Translations.end()) return it->second.c_str();
+    if (const auto it = g_EnglishTranslations.find(key); it != g_EnglishTranslations.end()) return it->second.c_str();
+    return fallback ? fallback : key;
+}
+
+static std::string TrLabel(const char* key, const char* fallback, const char* suffix) {
+    std::string text = Tr(key, fallback);
+    if (suffix) text += suffix;
+    return text;
+}
+
+struct LanguageOption {
+    const char* code;
+    const char* nativeName;
+    const char* englishName;
+};
+
+static constexpr std::array<LanguageOption, 13> kLanguageOptions{ {
+    { "en", "English", "English" },
+    { "zh-cn", "简体中文", "Chinese (Simplified)" },
+    { "ja", "Japanese", "Japanese" },
+    { "ko", "Korean", "Korean" },
+    { "cyrillic", "Cyrillic", "Cyrillic" },
+    { "th", "Thai", "Thai" },
+    { "tr", "Turkish", "Turkish" },
+    { "fr", "French", "French" },
+    { "de", "German", "German" },
+    { "it", "Italian", "Italian" },
+    { "pt", "Portuguese", "Portuguese" },
+    { "ru", "Russian", "Russian" },
+    { "es", "Spanish", "Spanish" },
+} };
+
+static std::vector<LanguageOption> GetAvailableLanguageOptions() {
+    std::vector<LanguageOption> out;
+    out.reserve(kLanguageOptions.size());
+    for (const auto& opt : kLanguageOptions) {
+        if (std::string(opt.code) == "en" || TranslationFileExists(opt.code)) {
+            out.push_back(opt);
+        }
+    }
+    if (out.empty()) {
+        out.push_back(kLanguageOptions[0]);
+    }
+    return out;
+}
+
+static const LanguageOption& CurrentLanguageOption() {
+    const std::string current = SanitizeLanguageCode(g_Language);
+    for (const auto& opt : kLanguageOptions) {
+        if (current == opt.code) return opt;
+    }
+    return kLanguageOptions[0];
+}
+
+static float LanguageFontScale(float scale) {
+    // Language selection should only change strings. Font size is controlled by
+    // the user's UI Scale + Font Scale settings, not by the selected language.
+    return scale;
+}
+
+static bool ButtonFit(const char* label, ImGuiMCP::ImVec2 size, float currentScale, float minScale = 0.72f) {
+    const char* safeLabel = label ? label : "";
+    std::string visibleLabel = safeLabel;
+    if (const size_t idPos = visibleLabel.find("##"); idPos != std::string::npos) {
+        visibleLabel.resize(idPos);
+    }
+    float availableW = size.x;
+    if (availableW < 0.0f) {
+        ImGuiMCP::ImVec2 avail;
+        ImGuiMCP::GetContentRegionAvail(&avail);
+        availableW = avail.x;
+    }
+    if (availableW <= 0.0f) {
+        return ImGuiMCP::Button(safeLabel, size);
+    }
+
+    ImGuiMCP::ImVec2 textSize;
+    ImGuiMCP::CalcTextSize(&textSize, safeLabel, nullptr, true, -1.0f);
+    const float innerW = availableW - (18.0f * currentScale);
+    float fittedScale = currentScale;
+    if (innerW > 12.0f && textSize.x > innerW) {
+        const float ratio = innerW / textSize.x;
+        const float floorScale = currentScale * minScale;
+        fittedScale = currentScale * ratio;
+        if (fittedScale < floorScale) fittedScale = floorScale;
+    }
+
+    if (fittedScale < currentScale - 0.001f) {
+        ImGuiMCP::SetWindowFontScale(fittedScale);
+    }
+    const bool pressed = ImGuiMCP::Button(safeLabel, size);
+    if (fittedScale < currentScale - 0.001f) {
+        ImGuiMCP::SetWindowFontScale(currentScale);
+        if (ImGuiMCP::IsItemHovered(ImGuiMCP::ImGuiHoveredFlags_AllowWhenDisabled)) {
+            ImGuiMCP::SetItemTooltip("%s", visibleLabel.c_str());
+        }
+    }
+    return pressed;
+}
+
+static bool IconButtonCentered(const char* id, const std::string& icon, ImGuiMCP::ImVec2 size,
+    float yNudge = 0.0f, float xNudge = 0.0f) {
+    const bool pressed = ImGuiMCP::Button(id, size);
+
+    ImGuiMCP::ImVec2 itemMin;
+    ImGuiMCP::ImVec2 itemMax;
+    ImGuiMCP::GetItemRectMin(&itemMin);
+    ImGuiMCP::GetItemRectMax(&itemMax);
+
+    ImGuiMCP::ImVec2 iconSize;
+    ImGuiMCP::CalcTextSize(&iconSize, icon.c_str(), nullptr, false, -1.0f);
+    const float x = itemMin.x + ((itemMax.x - itemMin.x) - iconSize.x) * 0.5f + xNudge;
+    const float y = itemMin.y + ((itemMax.y - itemMin.y) - iconSize.y) * 0.5f + yNudge;
+
+    auto* drawList = ImGuiMCP::GetWindowDrawList();
+    auto* font = ImGuiMCP::GetFont();
+    const float fontSize = ImGuiMCP::GetFontSize();
+    ImGuiMCP::ImDrawListManager::AddText(drawList, font, fontSize,
+        ImGuiMCP::ImVec2(x, y), IM_COL32(245, 245, 245, 255), icon.c_str());
+
+    return pressed;
 }
 
 static bool IsPluginPresent(const char* moduleName) {
@@ -547,7 +824,7 @@ static bool IsUserTyping() {
 
 // Opt-in: allow the launcher to open while the console is open (the console pauses time, letting
 // menus be edited with time stopped, and some editors need a console-picked target). Off by default.
-static std::atomic<bool> g_AllowOpenInConsole{ false };
+static std::atomic<bool> g_AllowOpenInConsole{ true };
 
 // Typing gate for the LAUNCHER hotkey only. Real text-entry fields (rename/search boxes) always
 // block it, but the console is allowed through when the user opted in. Mod-alias suppression keeps
@@ -572,7 +849,7 @@ static std::atomic<long long> g_RestartNoticeStartedMs{ 0 };
 // Opt-in: keep the game world running (animations, fire, NPCs) while our UI is open. By default the
 // menu pauses the game (SKSE Menu Framework does this); turning this ON overrides that so the world
 // keeps moving. Off by default (i.e. the game stays paused unless the user opts in).
-static std::atomic<bool> g_KeepGameRunning{ false };
+static std::atomic<bool> g_KeepGameRunning{ true };
 
 // "Keep the game running" clears the game's freezeTime that SKSE Menu Framework sets while a blocking
 // window is open. We must NOT touch the window's BlockUserInput flag to do this: that flag is what
@@ -761,6 +1038,34 @@ static void LoadENBConfig() {
         g_ENBConfig.enabled, g_ENBConfig.combinationVK, g_ENBConfig.editorVK);
 }
 
+static void ResolveDebugMenuApi(const char* context) {
+    if (HMODULE hMod = ::GetModuleHandleA("DebugMenu.dll")) {
+        if (!g_DebugMenuConfig.setMenuOpen) {
+            g_DebugMenuConfig.setMenuOpen = reinterpret_cast<DebugMenuConfig::FnSetMenuOpen>(
+                ::GetProcAddress(hMod, "DebugMenu_SetMenuOpen"));
+        }
+        if (!g_DebugMenuConfig.isMenuOpen) {
+            g_DebugMenuConfig.isMenuOpen = reinterpret_cast<DebugMenuConfig::FnIsMenuOpen>(
+                ::GetProcAddress(hMod, "DebugMenu_IsMenuOpen"));
+        }
+        if (!g_DebugMenuConfig.setHotkeysEnabled) {
+            g_DebugMenuConfig.setHotkeysEnabled = reinterpret_cast<DebugMenuConfig::FnSetHotkeysEnabled>(
+                ::GetProcAddress(hMod, "DebugMenu_SetHotkeyEnabled"));
+        }
+        if (!g_DebugMenuConfig.setHotkeysEnabled) {
+            g_DebugMenuConfig.setHotkeysEnabled = reinterpret_cast<DebugMenuConfig::FnSetHotkeysEnabled>(
+                ::GetProcAddress(hMod, "DebugMenu_SetHotkeysEnabled"));
+        }
+        SKSE::log::info("{}: DebugMenu API exports SetMenuOpen={:p} IsMenuOpen={:p} SetHotkeyEnabled={:p}",
+            context,
+            reinterpret_cast<void*>(g_DebugMenuConfig.setMenuOpen),
+            reinterpret_cast<void*>(g_DebugMenuConfig.isMenuOpen),
+            reinterpret_cast<void*>(g_DebugMenuConfig.setHotkeysEnabled));
+    } else {
+        SKSE::log::info("{}: DebugMenu.dll not loaded yet; API resolve deferred.", context);
+    }
+}
+
 static void LoadDebugMenuConfig() {
     g_DebugMenuConfig.enabled = IsPluginPresent("DebugMenu");
     if (!g_DebugMenuConfig.enabled) return;
@@ -769,8 +1074,14 @@ static void LoadDebugMenuConfig() {
     if (HMODULE hMod = ::GetModuleHandleA("DebugMenu.dll")) {
         g_DebugMenuConfig.setMenuOpen = reinterpret_cast<DebugMenuConfig::FnSetMenuOpen>(
             ::GetProcAddress(hMod, "DebugMenu_SetMenuOpen"));
+        g_DebugMenuConfig.isMenuOpen = reinterpret_cast<DebugMenuConfig::FnIsMenuOpen>(
+            ::GetProcAddress(hMod, "DebugMenu_IsMenuOpen"));
         g_DebugMenuConfig.setHotkeysEnabled = reinterpret_cast<DebugMenuConfig::FnSetHotkeysEnabled>(
-            ::GetProcAddress(hMod, "DebugMenu_SetHotkeysEnabled"));
+            ::GetProcAddress(hMod, "DebugMenu_SetHotkeyEnabled"));
+        if (!g_DebugMenuConfig.setHotkeysEnabled) {
+            g_DebugMenuConfig.setHotkeysEnabled = reinterpret_cast<DebugMenuConfig::FnSetHotkeysEnabled>(
+                ::GetProcAddress(hMod, "DebugMenu_SetHotkeysEnabled"));
+        }
         if (g_DebugMenuConfig.setMenuOpen)
             SKSE::log::info("LoadDebugMenuConfig: DebugMenu_SetMenuOpen resolved via DLL export.");
         else
@@ -1081,6 +1392,128 @@ static void LoadPartySheetConfig() {
         FormatHotkey(g_PartySheetConfig.modifierDIK));
 }
 
+// ---- Outfit Preview Selector (OPS) ----
+// OPS is a Papyrus/Scaleform mod (ESP OutfitPreviewSelector.esp). It opens/closes its "CustomMenu" in
+// response to SKSE mod events, exposes its open state through RE::UI, and stores its toggle key in the
+// MCM "Hotkey" property (a DirectInput scancode; default 79 = Numpad 1) on its config quest
+// OutfitPreviewSeectorQ (script OutfitPreviewSe). We open/close via the events, track state via
+// RE::UI, and free the key by setting Hotkey to 0 (no INI, no file edit; lives in the save).
+static bool IsOPSInstalled() {
+    // OPS support is temporarily DROPPED: its menu freezes input when opened with Risa loaded, and its
+    // installed version has no clean external open/close (the author's OPS_NativePreviewOpen event isn't
+    // in it yet). Reporting "not installed" hides the button, the settings row, and all key management,
+    // so Risa never touches OPS. The rest of the OPS integration is kept for when the author ships a
+    // proper API. To re-enable, restore the LookupModByName check below.
+    return false;
+#if 0
+    auto* dh = RE::TESDataHandler::GetSingleton();
+    return dh && dh->LookupModByName("OutfitPreviewSelector.esp") != nullptr;
+#endif
+}
+
+static void SendOPSModEvent(const char* eventName) {
+    if (auto* src = SKSE::GetModCallbackEventSource()) {
+        SKSE::ModCallbackEvent ev{ eventName, "", 0.0f, nullptr };
+        src->SendEvent(&ev);
+        SKSE::log::info("SendOPSModEvent: sent '{}'.", eventName);
+    }
+}
+
+static bool IsOPSMenuOpen() {
+    auto* ui = RE::UI::GetSingleton();
+    return ui && ui->IsMenuOpen("CustomMenu");
+}
+
+static bool GetOPSObject(RE::BSScript::Internal::VirtualMachine* vm,
+                         RE::BSTSmartPointer<RE::BSScript::Object>& out) {
+    auto* dh = RE::TESDataHandler::GetSingleton();
+    if (!vm || !dh) return false;
+    auto* policy = vm->GetObjectHandlePolicy();
+    if (!policy) return false;
+    for (auto* quest : dh->GetFormArray<RE::TESQuest>()) {
+        if (!quest) continue;
+        const auto handle = policy->GetHandleForObject(static_cast<RE::VMTypeID>(quest->GetFormType()), quest);
+        RE::BSTSmartPointer<RE::BSScript::Object> obj;
+        if (vm->FindBoundObject(handle, "OutfitPreviewSe", obj) && obj) {
+            out = obj;
+            return true;
+        }
+    }
+    return false;
+}
+
+// Set OPS's MCM "Hotkey" property (a DXScancode) by locating its config quest's script instance.
+// keyCode 0 = disabled (frees the key). Needs a save loaded so the quest script is bound; returns
+// false until then, so the retry loop keeps trying.
+static bool SetOPSHotkey(int keyCode) {
+    auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
+    RE::BSTSmartPointer<RE::BSScript::Object> obj;
+    if (!GetOPSObject(vm, obj)) return false;
+    if (auto* prop = obj->GetProperty("Hotkey")) {
+        const int oldKey = prop->GetSInt();
+        RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> cb;
+
+        if (oldKey > 0 && oldKey != keyCode) {
+            auto* args = RE::MakeFunctionArguments(static_cast<std::int32_t>(oldKey));
+            vm->DispatchMethodCall(obj, "UnregisterForKey", args, cb);
+            SKSE::log::info("SetOPSHotkey: unregistered OutfitPreviewSe key {}.", oldKey);
+        }
+
+        prop->SetSInt(keyCode);
+        SKSE::log::info("SetOPSHotkey: set OutfitPreviewSe.Hotkey = {}.", keyCode);
+
+        if (keyCode > 0 && oldKey != keyCode) {
+            auto* args = RE::MakeFunctionArguments(static_cast<std::int32_t>(keyCode));
+            vm->DispatchMethodCall(obj, "RegisterForKey", args, cb);
+            SKSE::log::info("SetOPSHotkey: registered OutfitPreviewSe key {}.", keyCode);
+        }
+
+        return true;
+    }
+    return false;
+}
+
+static void LoadOPSConfig() {
+    g_OPSConfig.enabled = IsOPSInstalled();
+    if (!g_OPSConfig.enabled) return;
+    g_OPSConfig.toggleDIK = 0x4F;
+    g_OPSConfig.toggleVK = VK_NUMPAD1;
+    SKSE::log::info("LoadOPSConfig: enabled=true (Outfit Preview Selector detected).");
+}
+
+// Read Mod Function Menu's current [Controls.Keyboard] iHotkey (a DirectInput scancode) from its TOML.
+// iHotkey also appears under [Controls.Gamepad], which we must ignore, so track the section. Default 59 (F1).
+static int ReadModFunctionMenuHotkey() {
+    int hotkey = 59;
+    const std::filesystem::path tomlPath = "Data/SKSE/Plugins/ccld_ModFunctionMenu.toml";
+    if (!std::filesystem::exists(tomlPath)) return hotkey;
+    std::ifstream in(tomlPath);
+    std::string line, section;
+    while (std::getline(in, line)) {
+        std::string t = TrimStr(line);
+        if (!t.empty() && t.front() == '[') { section = ToUpper(t); continue; }
+        if (section != "[CONTROLS.KEYBOARD]") continue;
+        const auto eq = t.find('=');
+        if (eq == std::string::npos || ToUpper(TrimStr(t.substr(0, eq))) != "IHOTKEY") continue;
+        std::string v = TrimStr(t.substr(eq + 1));
+        const auto c = v.find('#'); if (c != std::string::npos) v = TrimStr(v.substr(0, c));
+        try { hotkey = std::stoi(v); } catch (...) {}
+        break;
+    }
+    return hotkey;
+}
+
+static void LoadModFunctionMenuConfig() {
+    g_ModFunctionMenuConfig.enabled = IsPluginPresent("ccld_ModFunctionMenu");
+    if (!g_ModFunctionMenuConfig.enabled) return;
+
+    const int hotkey = ReadModFunctionMenuHotkey();
+    g_ModFunctionMenuConfig.toggleDIK = static_cast<WORD>(hotkey & 0xFF);
+    g_ModFunctionMenuConfig.toggleVK  = VKFromDIK(g_ModFunctionMenuConfig.toggleDIK);
+    SKSE::log::info("LoadModFunctionMenuConfig: enabled=true, iHotkey={}, toggleDIK={:#x}, toggleVK={:#x}",
+        hotkey, g_ModFunctionMenuConfig.toggleDIK, g_ModFunctionMenuConfig.toggleVK);
+}
+
 static void LoadCatMenuConfig() {
     g_CatMenuConfig.enabled = IsPluginPresent("catmenu");
     if (!g_CatMenuConfig.enabled) return;
@@ -1207,10 +1640,27 @@ static bool IsImprovedCameraModifierDown() {
     return (keyState(g_ImprovedCameraConfig.modifierVK) & 0x8000) != 0;
 }
 
-static std::atomic<float> g_WindowPosX{ -1.0f };
-static std::atomic<float> g_WindowPosY{ -1.0f };
-static std::atomic<float> g_SettingsWindowHeight{ 754.0f }; // user-resized Settings tab height (persisted)
-static std::atomic<float> g_LauncherFontScale{ 0.9f };
+static std::atomic<float> g_WindowPosX{ 692.0f };
+static std::atomic<float> g_WindowPosY{ 153.0f };
+static std::atomic<float> g_SettingsWindowHeight{ 835.0f }; // user-resized Settings tab height (persisted)
+static std::atomic<float> g_LauncherFontScale{ 0.85f };
+static std::atomic<float> g_LauncherTextScale{ 0.95f };
+static std::atomic<long long> g_LanguageComboActiveUntilMs{ 0 };
+static std::atomic<float> g_HotkeyLayoutNameColumnW{ 178.57f };
+static std::atomic<float> g_HotkeyLayoutExpandColumnW{ 38.86f };
+static std::atomic<float> g_HotkeyLayoutKeyColumnW{ 167.63f };
+static std::atomic<float> g_HotkeyLayoutSpacerWeight{ 0.78f };
+static std::atomic<float> g_HotkeyLayoutAdvColumnW{ 70.70f };
+static std::atomic<float> g_HotkeyLayoutToggleColumnW{ 113.78f };
+static std::atomic<float> g_HotkeyLayoutTableRightMargin{ 0.00f };
+static std::atomic<float> g_HotkeyLayoutAdvButtonWMult{ 1.39f };
+static std::atomic<float> g_HotkeyLayoutAdvButtonHMult{ 0.92f };
+static std::atomic<float> g_HotkeyLayoutAdvIconXNudge{ 1.18f };
+static std::atomic<float> g_HotkeyLayoutAdvIconYNudge{ 2.85f };
+static std::atomic<float> g_HotkeyLayoutToggleHeightMult{ 0.86f };
+static std::atomic<float> g_HotkeyLayoutToggleMinH{ 28.78f };
+static std::atomic<float> g_HotkeyLayoutToggleWidthMult{ 1.76f };
+static std::atomic<float> g_HotkeyLayoutToggleRightPad{ 16.04f };
 static std::atomic<WORD> g_LauncherHotkeyDIK{ 0x3B };  // Default F1 (0x3B)
 static std::atomic<WORD> g_LauncherHotkeyVK{ 0x70 };   // Default VK_F1 (0x70)
 static std::atomic<bool> g_LauncherHotkeyCtrl{ false };
@@ -1219,7 +1669,7 @@ static std::atomic<bool> g_LauncherHotkeyAlt{ false };
 static std::atomic<bool> g_LauncherHotkeyDoubleTap{ false };
 // When on: opening still needs the full hotkey (modifier and/or double-tap), but a single
 // bare press of the key alone closes whatever is open.
-static std::atomic<bool> g_LauncherHotkeyEasyClose{ false };
+static std::atomic<bool> g_LauncherHotkeyEasyClose{ true };
 static std::atomic<bool> g_LauncherHotkeyHold{ false };
 static std::atomic<int> g_LauncherHoldDurationMs{ 500 };
 static long long g_LauncherHoldStartedMs = 0;   // when the launcher key started being held (0 = not held)
@@ -1242,6 +1692,8 @@ static std::atomic<bool> g_UnblockMF{ false };      // cosmetic: MF has no manag
 static std::atomic<bool> g_UnblockSearchUI{ false };// ON = user's key opens SearchUI; OFF = key freed, button still opens
 static std::atomic<bool> g_UnblockMCM{ false };     // ON = user's key opens MCM; OFF = key freed, button still opens
 static std::atomic<bool> g_UnblockQAR{ false };     // ON = user's key opens QAR; OFF = key freed, button still opens
+static std::atomic<bool> g_UnblockModFunctionMenu{ false }; // ON = user's key opens Mod Function Menu; OFF = key freed, button still opens
+static std::atomic<bool> g_UnblockOPS{ false };     // ON = user's key opens Outfit Preview Selector; OFF = key freed, button still opens
 static std::atomic<bool> g_UnblockCSEditor{ false };  // Community Shaders sub-toggles (rebindable in settings)
 static std::atomic<bool> g_UnblockCSOverlay{ false };
 static std::atomic<bool> g_UnblockCSEffect{ false };
@@ -1257,7 +1709,7 @@ static std::atomic<bool> g_PartySheetDirectDispatch{ false };
 // chordDown[] array in PollOriginalHotkeyAliases.
 // Indices 0..AI_Dragonborn are the chordDown[] watcher mods. AI_ReShade (raw-input bridge) and
 // AI_MF (own bridge below) are rebindable too but handled outside the chordDown loop.
-enum AliasIdx { AI_OAR = 0, AI_IED, AI_ENB, AI_DMenu, AI_IC, AI_FLICK, AI_DebugMenu, AI_KreatE, AI_CS, AI_CatMenu, AI_Dragonborn, AI_ReShade, AI_MF, AI_CSEditor, AI_CSOverlay, AI_CSEffect, AI_PartySettings, AI_PartySheet, AI_PartyInspect, AI_PartyCharacter, AI_SearchUI, AI_MCM, AI_QAR, AI_COUNT };
+enum AliasIdx { AI_OAR = 0, AI_IED, AI_ENB, AI_DMenu, AI_IC, AI_FLICK, AI_DebugMenu, AI_KreatE, AI_CS, AI_CatMenu, AI_Dragonborn, AI_ReShade, AI_MF, AI_CSEditor, AI_CSOverlay, AI_CSEffect, AI_PartySettings, AI_PartySheet, AI_PartyInspect, AI_PartyCharacter, AI_SearchUI, AI_MCM, AI_QAR, AI_ModFunctionMenu, AI_OPS, AI_COUNT };
 static std::atomic<WORD> g_AliasDik[AI_COUNT];
 static std::atomic<bool> g_AliasCtrl[AI_COUNT];
 static std::atomic<bool> g_AliasShift[AI_COUNT];
@@ -1271,7 +1723,7 @@ static std::string g_ExclusionsDetailText = "";
 static int g_ExclusionStep = 0;
 static const char* const g_AliasIds[AI_COUNT] = {
     "OAR", "IED", "ENB", "dMenu", "ImprovedCamera", "FLICK", "DebugMenu", "KreatE", "CS", "CatMenu", "Dragonborn", "ReShade", "MF",
-    "CSEditor", "CSOverlay", "CSEffect", "PartySettings", "PartySheet", "PartyInspect", "PartyCharacter", "SearchUI", "MCM", "QAR"
+    "CSEditor", "CSOverlay", "CSEffect", "PartySettings", "PartySheet", "PartyInspect", "PartyCharacter", "SearchUI", "MCM", "QAR", "ModFunctionMenu", "OPS"
 };
 static std::atomic<bool>* const g_AliasUnblock[AI_COUNT] = {
     &g_UnblockOAR, &g_UnblockIED, &g_UnblockENB, &g_UnblockDMenu, &g_UnblockImprovedCamera,
@@ -1279,7 +1731,7 @@ static std::atomic<bool>* const g_AliasUnblock[AI_COUNT] = {
     &g_UnblockDragonborn, &g_UnblockReShade, &g_UnblockMF,
     &g_UnblockCSEditor, &g_UnblockCSOverlay, &g_UnblockCSEffect,
     &g_UnblockPartySettings, &g_UnblockPartySheet, &g_UnblockPartyInspect, &g_UnblockPartyCharacter,
-    &g_UnblockSearchUI, &g_UnblockMCM, &g_UnblockQAR
+    &g_UnblockSearchUI, &g_UnblockMCM, &g_UnblockQAR, &g_UnblockModFunctionMenu, &g_UnblockOPS
 };
 static std::atomic<int> g_CapturingAlias{ -1 }; // which alias row is in "press a key" capture (-1 = none)
 static std::atomic<long long> g_KeyCaptureStartedMs{ 0 }; // when the key capturing was started (for 3s timeout)
@@ -1333,7 +1785,7 @@ static void InitAliasDefaults() {
     set(AI_CatMenu, 0x40, false, false, false); // F6
     set(AI_Dragonborn, 0x3B, false, false, false); // F1
     set(AI_ReShade, 0xC7, false, false, false); // Home
-    set(AI_MF, 0x3B, false, false, false);      // F1 (launcher default)
+    set(AI_MF, 0x3D, false, false, false);      // F3
     set(AI_CSEditor, 0xCF, false, true, false); // Shift + End (CS Editor)
     set(AI_CSOverlay, 0x44, false, false, false); // F10 (CS Overlay)
     set(AI_CSEffect, 0x37, false, false, false);  // Numpad * (CS Effect)
@@ -1344,6 +1796,8 @@ static void InitAliasDefaults() {
     set(AI_SearchUI, 0x3E, false, false, false);       // F4 (SearchUI's own default)
     set(AI_MCM, 0x00, false, false, false);            // none until the user picks one
     set(AI_QAR, 0x00, false, false, false);            // none until the user picks one
+    set(AI_ModFunctionMenu, 0x3B, false, false, false); // F1 (Mod Function Menu's own default)
+    set(AI_OPS, 0x4F, false, false, false);            // Numpad 1 (Outfit Preview Selector's own default)
 }
 
 static void RestoreAliasToDefault(int idx) {
@@ -1365,7 +1819,7 @@ static void RestoreAliasToDefault(int idx) {
         case AI_CatMenu: set(AI_CatMenu, 0x40, false, false, false); break;
         case AI_Dragonborn: set(AI_Dragonborn, 0x3B, false, false, false); break;
         case AI_ReShade: set(AI_ReShade, 0xC7, false, false, false); break;
-        case AI_MF: set(AI_MF, 0x3B, false, false, false); break;
+        case AI_MF: set(AI_MF, 0x3D, false, false, false); break;
         case AI_CSEditor: set(AI_CSEditor, 0xCF, false, true, false); break;
         case AI_CSOverlay: set(AI_CSOverlay, 0x44, false, false, false); break;
         case AI_CSEffect: set(AI_CSEffect, 0x37, false, false, false); break;
@@ -1376,6 +1830,8 @@ static void RestoreAliasToDefault(int idx) {
         case AI_SearchUI: set(AI_SearchUI, 0x3E, false, false, false); break;
         case AI_MCM: set(AI_MCM, 0x00, false, false, false); break;
         case AI_QAR: set(AI_QAR, 0x00, false, false, false); break;
+        case AI_ModFunctionMenu: set(AI_ModFunctionMenu, 0x3B, false, false, false); break;
+        case AI_OPS: set(AI_OPS, 0x4F, false, false, false); break;
         default: break;
     }
 }
@@ -1405,12 +1861,12 @@ static bool IsRebinding() {
 }
 
 static std::vector<std::string> g_ButtonOrder = {
-    "MF", "MCM", "SearchUI", "OAR", "IED", "DebugMenu", "dMenu", "ImprovedCamera", "ENB", "FLICK", "KreatE", "CS", "PartySheet", "CatMenu", "Dragonborn", "ReShade", "QAR"
+    "MF", "MCM", "SearchUI", "OAR", "IED", "DebugMenu", "dMenu", "ImprovedCamera", "ENB", "FLICK", "KreatE", "CS", "PartySheet", "CatMenu", "Dragonborn", "ReShade", "QAR", "ModFunctionMenu", "OPS"
 };
 // Every launcher button id that should exist in the order. On load we append any missing from a
 // user's saved order so newly added buttons (e.g. QAR) still show up for existing installs.
 static const std::vector<std::string> kAllButtonIds = {
-    "MF", "MCM", "SearchUI", "OAR", "IED", "DebugMenu", "dMenu", "ImprovedCamera", "ENB", "FLICK", "KreatE", "CS", "PartySheet", "CatMenu", "Dragonborn", "ReShade", "QAR"
+    "MF", "MCM", "SearchUI", "OAR", "IED", "DebugMenu", "dMenu", "ImprovedCamera", "ENB", "FLICK", "KreatE", "CS", "PartySheet", "CatMenu", "Dragonborn", "ReShade", "QAR", "ModFunctionMenu", "OPS"
 };
 
 static void SaveButtonOrder() {
@@ -1426,7 +1882,9 @@ static void SaveButtonOrder() {
             }
         }
         outfile << "\n";
+        outfile << "Language = " << g_Language << "\n";
         outfile << "FontScale = " << g_LauncherFontScale.load() << "\n";
+        outfile << "TextScale = " << g_LauncherTextScale.load() << "\n";
         outfile << "WindowPosX = " << g_WindowPosX.load() << "\n";
         outfile << "WindowPosY = " << g_WindowPosY.load() << "\n";
         outfile << "SettingsHeight = " << g_SettingsWindowHeight.load() << "\n";
@@ -1454,6 +1912,8 @@ static void SaveButtonOrder() {
         outfile << "EnableOriginalSearchUI = " << (g_UnblockSearchUI.load() ? 1 : 0) << "\n";
         outfile << "EnableOriginalMCM = " << (g_UnblockMCM.load() ? 1 : 0) << "\n";
         outfile << "EnableOriginalQAR = " << (g_UnblockQAR.load() ? 1 : 0) << "\n";
+        outfile << "EnableOriginalModFunctionMenu = " << (g_UnblockModFunctionMenu.load() ? 1 : 0) << "\n";
+        outfile << "EnableOriginalOPS = 0\n";
         outfile << "EnableLogging = " << (g_LoggingEnabled.load() ? 1 : 0) << "\n";
         outfile << "EnableFileChangeLog = " << (g_FileChangeLogEnabled.load() ? 1 : 0) << "\n";
         outfile << "AllowOpenInConsole = " << (g_AllowOpenInConsole.load() ? 1 : 0) << "\n";
@@ -1521,9 +1981,15 @@ static void LoadButtonOrder() {
                 std::string val = TrimStr(line.substr(eq + 1));
                 if (key == "BUTTONORDER") {
                     loaded = SplitStr(val, ',');
+                } else if (key == "LANGUAGE") {
+                    g_Language = SanitizeLanguageCode(val);
                 } else if (key == "FONTSCALE") {
                     try {
                         g_LauncherFontScale.store(std::stof(val));
+                    } catch (...) {}
+                } else if (key == "TEXTSCALE") {
+                    try {
+                        g_LauncherTextScale.store(std::stof(val));
                     } catch (...) {}
                 } else if (key == "WINDOWPOSX") {
                     try { g_WindowPosX.store(std::stof(val)); } catch (...) {}
@@ -1583,6 +2049,10 @@ static void LoadButtonOrder() {
                     try { g_UnblockMCM.store(std::stoi(val) != 0); } catch (...) {}
                 } else if (key == "ENABLEORIGINALQAR") {
                     try { g_UnblockQAR.store(std::stoi(val) != 0); } catch (...) {}
+                } else if (key == "ENABLEORIGINALMODFUNCTIONMENU") {
+                    try { g_UnblockModFunctionMenu.store(std::stoi(val) != 0); } catch (...) {}
+                } else if (key == "ENABLEORIGINALOPS") {
+                    g_UnblockOPS.store(false);
                 } else if (key == "ENABLELOGGING") {
                     try { g_LoggingEnabled.store(std::stoi(val) != 0); } catch (...) {}
                 } else if (key == "ENABLEFILECHANGELOG") {
@@ -1675,6 +2145,7 @@ static void LoadButtonOrder() {
 
     g_ButtonOrder = newOrder;
     ApplyLogLevel(); // honor the saved logging toggle
+    LoadTranslations();
     SKSE::log::info("LoadButtonOrder: Loaded button order successfully.");
 }
 
@@ -1735,6 +2206,10 @@ static std::atomic<long long> g_AllowImprovedCameraOpenUntilMs{ 0 };
 
 static std::atomic<bool> g_AllowFLICKOpen{ false };
 static std::atomic<long long> g_AllowFLICKOpenUntilMs{ 0 };
+static std::atomic<bool> g_FLICKHotkeyManaged{ false };
+static std::atomic<long long> g_LastFLICKHotkeyAttemptMs{ 0 };
+static std::atomic<long long> g_FLICKHotkeyReassertUntilMs{ 0 };
+static std::atomic<bool> g_FLICKKeyRelocated{ false }; // ini toggle key parked on F14 (frees F7)
 
 static std::atomic<bool> g_AllowKreatEOpen{ false };
 static std::atomic<long long> g_AllowKreatEOpenUntilMs{ 0 };
@@ -1743,6 +2218,10 @@ static std::atomic<long long> g_LastKreatEIniAttemptMs{ 0 };
 
 static std::atomic<bool> g_CatMenuIniManaged{ false };
 static std::atomic<long long> g_LastCatMenuIniAttemptMs{ 0 };
+static std::atomic<bool> g_ModFunctionMenuIniManaged{ false };
+static std::atomic<long long> g_LastModFunctionMenuIniAttemptMs{ 0 };
+static std::atomic<bool> g_OPSKeyManaged{ false };
+static std::atomic<long long> g_LastOPSKeyAttemptMs{ 0 };
 
 static std::atomic<bool> g_AllowDragonbornOpen{ false };
 static std::atomic<long long> g_AllowDragonbornOpenUntilMs{ 0 };
@@ -1760,6 +2239,7 @@ static bool IsSearchUIAvailable();
 extern std::atomic<int> g_SearchUIEffectiveDIK;
 
 static constexpr WORD kEscapeDIK   = 0x01;  // ESC scan code
+static constexpr WORD kTabDIK      = 0x0F;  // TAB scan code
 
 static long long NowMs();
 static bool CheckLauncherDoubleTap(long long now);
@@ -1770,6 +2250,7 @@ static void ForceCloseSKSEMenuFramework();
 static void ToggleLauncher();
 static void SyncDMenuKeyViaApi();
 static void SyncSearchUIKey();
+static void TryManageFLICKHotkey(bool lateRetry = false);
 static bool IsGameLoaded();
 static void OpenMCM();
 static void SimulateModifiedKey(WORD modifierDIK, WORD keyDIK);
@@ -1778,6 +2259,7 @@ static void PostKeyWithScanToGameWindow(WORD vk, WORD scan);
 static void TryHookModSinks();
 static void TryHookCatMenuNativeKey();
 static FLICKInterface* GetFLICKInterface();
+static bool SetFLICKHotkeyEnabled(bool enabled);
 static bool IsENBOpeningTransition();
 static bool DispatchKeyToCSSink(WORD dik);
 static void CloseActiveModMenu(ActiveMenu active);
@@ -1814,6 +2296,14 @@ static void OpenDragonbornToolkit();
 static void OpenReShade();
 static void OpenQAR();
 static bool IsQARInstalled();
+static void OpenModFunctionMenu();
+static void LoadModFunctionMenuConfig();
+static void TryManageModFunctionMenuHotkey(bool lateRetry = false);
+static void OpenOPS();
+static bool IsOPSInstalled();
+static void LoadOPSConfig();
+static void TryManageOPSHotkey(bool lateRetry = false);
+static bool SetOPSHotkey(int keyCode);
 static bool SetOAROpen(bool open);
 static bool SetCatMenuOpen(bool open);
 static bool SetDragonbornOpen(bool open);
@@ -2147,17 +2637,9 @@ static void CloseActiveModMenu(ActiveMenu active) {
         g_ActiveMenu.store(static_cast<ActiveMenu>(0)); // ActiveMenu::None
 
         if (!g_DebugMenuConfig.setMenuOpen) {
-            HMODULE hMod = ::GetModuleHandleA("DebugMenu.dll");
-            SKSE::log::info("CloseActiveModMenu: GetModuleHandleA('DebugMenu.dll') = {:p}", (void*)hMod);
-            if (hMod) {
-                auto p1 = ::GetProcAddress(hMod, "DebugMenu_SetMenuOpen");
-                auto p2 = ::GetProcAddress(hMod, "DebugMenu_SetHotkeysEnabled");
-                SKSE::log::info("CloseActiveModMenu: GetProcAddress DebugMenu_SetMenuOpen={:p} DebugMenu_SetHotkeysEnabled={:p}", (void*)p1, (void*)p2);
-                g_DebugMenuConfig.setMenuOpen = reinterpret_cast<DebugMenuConfig::FnSetMenuOpen>(p1);
-                g_DebugMenuConfig.setHotkeysEnabled = reinterpret_cast<DebugMenuConfig::FnSetHotkeysEnabled>(p2);
-                if (g_DebugMenuConfig.setMenuOpen) {
-                    SKSE::log::info("CloseActiveModMenu: Resolved DebugMenu_SetMenuOpen dynamically on close.");
-                }
+            ResolveDebugMenuApi("CloseActiveModMenu");
+            if (g_DebugMenuConfig.setMenuOpen) {
+                SKSE::log::info("CloseActiveModMenu: Resolved DebugMenu_SetMenuOpen dynamically on close.");
             }
         }
 
@@ -2253,6 +2735,32 @@ static void CloseActiveModMenu(ActiveMenu active) {
         // its "Escape closes windows" setting on. QAR blocks game input while open, so Esc won't leak.
         SimulateModifiedKey(0, kEscapeDIK);
         SKSE::log::info("CloseActiveModMenu: closing QAR via simulated Escape.");
+    } else if (active == ActiveMenu::SearchUI) {
+        // SearchUI's UITextEntryMenu closes through its native Tab action; it has no close API.
+        InjectEngineKey(kTabDIK);
+        SKSE::log::info("CloseActiveModMenu: closing SearchUI via injected Tab.");
+    } else if (active == ActiveMenu::ModFunctionMenu) {
+        SKSE::log::info("MFM_TRACE close-request: active={}, launcherOpen={}, lockRemainingMs={}, toggleDIK={}",
+            static_cast<int>(g_ActiveMenu.load()),
+            g_LauncherWindow && g_LauncherWindow->IsOpen.load(),
+            std::max<long long>(0, g_MenuOpenLockUntilMs.load() - NowMs()),
+            NameFromDIK(g_ModFunctionMenuConfig.toggleDIK));
+        // Mod Function Menu's hotkey is a real toggle (pressing it while open calls Close()). So we close
+        // it the same way we open it - inject F20 through the engine queue it reads. No Esc involved at
+        // all; the user's own physical Esc still closes it too, by default.
+        const WORD toggleDIK = g_ModFunctionMenuConfig.toggleDIK;
+        std::thread([toggleDIK]() {
+            std::this_thread::sleep_for(std::chrono::milliseconds(80));
+            SKSE::log::info("MFM_TRACE delayed-close-inject: sending {} after F1 handoff.",
+                NameFromDIK(toggleDIK));
+            InjectEngineKey(toggleDIK);
+        }).detach();
+        SKSE::log::info("CloseActiveModMenu: scheduled Mod Function Menu close with {} after handoff.",
+            NameFromDIK(toggleDIK));
+    } else if (active == ActiveMenu::OPS) {
+        // Close via the author's intended SKSE mod event (matches OPS_NativePreviewOpen).
+        SendOPSModEvent("OPS_NativePreviewClose");
+        SKSE::log::info("CloseActiveModMenu: closing Outfit Preview Selector via OPS_NativePreviewClose.");
     } else if (active == ActiveMenu::ReShade) {
         if (g_ReShadeAddonActive.load() && RisaReShade::RuntimeReady()) {
             // Keyless close through ReShade's own API.
@@ -2960,7 +3468,7 @@ static void HookedKbProcess(RE::BSWin32KeyboardDevice* self, float a_dt) {
 
     // Unified physical-ESC handling while any mod menu is active. Reads ESC at OS level so it works
     // regardless of which mod is capturing input. Two cases:
-    //   * Self-closing menus (OAR, dMenu, FLICK, Improved Camera, Party Sheet, SKSE MF, IED) consume
+    //   * Self-closing menus (OAR, Improved Camera, Party Sheet, SKSE MF, IED) consume
     //     ESC and close themselves — we ONLY clear our active-menu state so the next F1 opens the
     //     launcher (this replaces the old cursor guess that misfired and broke F1-close).
     //   * ESC-ignoring menus (Debug Menu, ENB, KreatE, Dragonborn, CatMenu) are closed explicitly via
@@ -2972,7 +3480,7 @@ static void HookedKbProcess(RE::BSWin32KeyboardDevice* self, float a_dt) {
                                                       : ::GetAsyncKeyState(VK_ESCAPE)) & 0x8000;
         static bool s_escWasDown = false;
         if (escMenu != ActiveMenu::None && escMenu != ActiveMenu::ReShade &&
-            !IsRebinding() && (escMenu == ActiveMenu::DebugMenu || !IsUserTyping()) &&
+            !IsRebinding() && (escMenu == ActiveMenu::DebugMenu || escMenu == ActiveMenu::SearchUI || !IsUserTyping()) &&
             now >= g_MenuOpenLockUntilMs.load() && !IsENBOpeningTransition()) {
             if (escDown && !s_escWasDown && now - g_LastOriginalHotkeyMs.load() > 300) {
                 g_LastOriginalHotkeyMs.store(now);
@@ -2980,12 +3488,13 @@ static void HookedKbProcess(RE::BSWin32KeyboardDevice* self, float a_dt) {
                 // ignore it. So always close dMenu explicitly through its API/key (harmlessly double-
                 // closes the v2 build). It isn't in EscBlockedForActiveMenu because dMenu blocks the
                 // game's input itself while open, so ESC can't leak, and the v2 build still reads ESC.
-                // Debug Menu's Scaleform menu consumes ESC through the menu-input path and closes
-                // itself; if we ALSO inject its toggle key here it just re-opens. So treat Debug Menu
-                // as self-closing (clear state, no inject) - ESC is still stripped from the game by
-                // EscBlockedForActiveMenu, so nothing leaks. The launcher key still closes it explicitly.
-                const bool explicitClose = (EscBlockedForActiveMenu() && escMenu != ActiveMenu::DebugMenu)
-                                           || escMenu == ActiveMenu::DMenu;
+                // DebugMod does not handle ESC natively. Close it with the same path as its second F1
+                // press: the exported API when available, otherwise its configured toggle key.
+                const bool explicitClose = EscBlockedForActiveMenu()
+                                           || escMenu == ActiveMenu::DMenu
+                                           || escMenu == ActiveMenu::FLICK
+                                           || escMenu == ActiveMenu::DebugMenu
+                                           || escMenu == ActiveMenu::SearchUI;
                 if (explicitClose) {
                     // Keep ESC stripped from the game for a moment after we close the menu, so the
                     // still-held ESC can't pop Skyrim's system menu once g_ActiveMenu clears to None.
@@ -2994,9 +3503,17 @@ static void HookedKbProcess(RE::BSWin32KeyboardDevice* self, float a_dt) {
                         static_cast<int>(escMenu));
                     CloseActiveModMenu(escMenu);
                 } else {
-                    // Self-closing menu: it dismisses itself on ESC; just clear our stale state.
+                    // Self-closing menu: it dismisses itself on ESC; just clear our stale state. Keep ESC
+                    // stripped from the game briefly so a still-held ESC can't pop Skyrim's system menu
+                    // once the menu closes (matters for menus not covered by EscBlockedForActiveMenu).
+                    if (escMenu == ActiveMenu::ModFunctionMenu) {
+                        SKSE::log::info("MFM_TRACE ESC-state-clear: MFM reported/appeared self-closed; launcherOpen={}, lockRemainingMs={}",
+                            g_LauncherWindow && g_LauncherWindow->IsOpen.load(),
+                            std::max<long long>(0, g_MenuOpenLockUntilMs.load() - now));
+                    }
                     g_ActiveMenu.store(ActiveMenu::None);
                     g_LastLauncherToggleMs.store(now - 1000);
+                    g_SuppressEscUntilMs.store(now + 400);
                     SKSE::log::info("HookedKbProcess: ESC on self-closing menu ({}); cleared active-menu state.",
                         static_cast<int>(escMenu));
                 }
@@ -3261,7 +3778,7 @@ static void PollOriginalHotkeyAliases(const BYTE* state) {
         g_UnblockENB.load() && g_ENBConfig.enabled && !enbAliasIsNative && !AliasEqualsLauncher(AI_ENB) && aliasDown(AI_ENB),
         g_UnblockDMenu.load() && g_DMenuConfig.enabled && DMenuOriginalMoved() && !AliasEqualsLauncher(AI_DMenu) && aliasDown(AI_DMenu),
         false, // Improved Camera aliases are handled once at the raw-input make edge.
-        g_UnblockFLICK.load() && g_FLICKConfig.enabled && FLICKOriginalMoved() && !AliasEqualsLauncher(AI_FLICK) && aliasDown(AI_FLICK),
+        g_UnblockFLICK.load() && g_FLICKConfig.enabled && !AliasEqualsLauncher(AI_FLICK) && aliasDown(AI_FLICK),
         g_UnblockDebugMenu.load() && g_DebugMenuConfig.enabled &&
             g_AliasDik[AI_DebugMenu].load() != g_DebugMenuConfig.toggleDIK && // alias == real key: it opens directly, don't also inject
             !AliasEqualsLauncher(AI_DebugMenu) && aliasDown(AI_DebugMenu),
@@ -3347,6 +3864,30 @@ static void PollOriginalHotkeyAliases(const BYTE* state) {
                     !IsExternalMenuOpen() && !IsENBOpeningTransition() &&
                     now >= g_MenuOpenLockUntilMs.load()) {
                     OpenSKSEMenuFramework();
+                }
+            }
+        }
+    }
+
+    // Mod Function Menu is relocated to F20 so its native key is free. Its user-facing alias
+    // still opens the menu through the same injected-key path as the launcher button.
+    {
+        const bool mfmChord = g_UnblockModFunctionMenu.load() &&
+            g_ModFunctionMenuConfig.enabled &&
+            !AliasEqualsLauncher(AI_ModFunctionMenu) &&
+            aliasDown(AI_ModFunctionMenu);
+        if (CheckAliasTrigger(AI_ModFunctionMenu, mfmChord)) {
+            const long long now = NowMs();
+            const long long last = g_LastOriginalHotkeyMs.exchange(now);
+            if (now - last > 500) {
+                const auto active = g_ActiveMenu.load();
+                if (active == ActiveMenu::ModFunctionMenu) {
+                    CloseActiveModMenu(active);
+                } else if (active == ActiveMenu::None &&
+                    !(g_LauncherWindow && g_LauncherWindow->IsOpen.load()) &&
+                    !IsExternalMenuOpen() && !IsENBOpeningTransition() &&
+                    now >= g_MenuOpenLockUntilMs.load()) {
+                    OpenModFunctionMenu();
                 }
             }
         }
@@ -3494,6 +4035,9 @@ static HRESULT STDMETHODCALLTYPE HookedGetDeviceState(IDirectInputDevice8A* pDev
             TryManageKreatEHotkey(true);
             TryManageCSHotkey(true);
             TryManageCatMenuHotkey(true);
+            TryManageModFunctionMenuHotkey(true);
+            TryManageFLICKHotkey(true);
+            TryManageOPSHotkey(true);
             TryManageDragonbornHotkey(true);
             SyncDMenuKeyViaApi();  // keep dMenu's key freed (or restored) live via the v2 API
             SyncSearchUIKey();     // keep SearchUI's key freed (F18) or restored, live via the Papyrus VM
@@ -5098,6 +5642,23 @@ static FLICKInterface* GetFLICKInterface() {
     return api;
 }
 
+static bool SetFLICKHotkeyEnabled(bool enabled) {
+    auto* flick = GetFLICKInterface();
+    if (!flick) {
+        return false;
+    }
+
+    if (flick->version < 3 || !flick->SetHotkeyEnabled) {
+        SKSE::log::warn("FLICK API: SetHotkeyEnabled({}) unavailable on API version {}; FLICK hotkey left unchanged.",
+            enabled, flick->version);
+        return false;
+    }
+
+    flick->SetHotkeyEnabled(enabled);
+    SKSE::log::info("FLICK API: SetHotkeyEnabled({}) via RequestFUCK.", enabled);
+    return true;
+}
+
 // Quick Armor Rebalance is an SKSE-only ImGui utility (no ESP). Detect it by its loaded DLL.
 static bool IsQARInstalled() {
     return ::GetModuleHandleA("QuickArmorRebalance.dll") != nullptr;
@@ -5123,9 +5684,111 @@ static void OpenQAR() {
     SKSE::log::info("OpenQAR: opened Quick Armor Rebalance via QuickArmorRebalance.Open() (Papyrus native).");
 }
 
+static void OpenModFunctionMenu(const char* source) {
+    SKSE::log::info("MFM_TRACE open-request: source={}, active={}, launcherOpen={}, externalMenu={}, lockRemainingMs={}, toggleDIK={}",
+        source ? source : "unknown",
+        static_cast<int>(g_ActiveMenu.load()),
+        g_LauncherWindow && g_LauncherWindow->IsOpen.load(),
+        IsExternalMenuOpen(),
+        std::max<long long>(0, g_MenuOpenLockUntilMs.load() - NowMs()),
+        NameFromDIK(g_ModFunctionMenuConfig.toggleDIK));
+    if (!g_ModFunctionMenuConfig.enabled) {
+        SKSE::log::warn("OpenModFunctionMenu: Mod Function Menu is not available.");
+        return;
+    }
+
+    if (g_ActiveMenu.load() == ActiveMenu::ModFunctionMenu) {
+        SKSE::log::info("MFM_TRACE open-request became close: MFM already active.");
+        CloseLauncher();
+        CloseActiveModMenu(ActiveMenu::ModFunctionMenu);
+        g_LastLauncherToggleMs.store(NowMs());
+        return;
+    }
+
+    CloseLauncher();
+    g_LastLauncherToggleMs.store(NowMs());
+    g_ActiveMenu.store(ActiveMenu::ModFunctionMenu);
+    // Let the launcher release its ImGui focus/capture for one frame before sending MFM's
+    // relocated engine-queue toggle. This avoids a visible open-time handoff flicker.
+    g_MenuOpenLockUntilMs.store(NowMs() + 350);
+    const WORD toggleDIK = g_ModFunctionMenuConfig.toggleDIK;
+    std::thread([toggleDIK]() {
+        std::this_thread::sleep_for(std::chrono::milliseconds(80));
+        if (g_ActiveMenu.load() != ActiveMenu::ModFunctionMenu) {
+            SKSE::log::warn("MFM_TRACE delayed-inject cancelled: active menu changed to {}.",
+                static_cast<int>(g_ActiveMenu.load()));
+            return;
+        }
+        SKSE::log::info("MFM_TRACE delayed-inject: sending {} after 80ms; launcherOpen={}.",
+            NameFromDIK(toggleDIK), g_LauncherWindow && g_LauncherWindow->IsOpen.load());
+        // The launcher key can auto-repeat while the user is clicking the MFM button. Refresh the
+        // launcher debounce at the actual handoff so that repeat cannot immediately close MFM.
+        g_LastLauncherToggleMs.store(NowMs());
+        InjectEngineKey(toggleDIK);
+        SKSE::log::info("OpenModFunctionMenu: injected {} to open Mod Function Menu after launcher handoff.",
+            NameFromDIK(toggleDIK));
+    }).detach();
+}
+
+static void OpenModFunctionMenu() {
+    OpenModFunctionMenu("button");
+}
+
+static void OpenOPS() {
+    if (!g_OPSConfig.enabled) {
+        SKSE::log::warn("OpenOPS: Outfit Preview Selector is not available.");
+        return;
+    }
+
+    if (g_ActiveMenu.load() == ActiveMenu::OPS || IsOPSMenuOpen()) {
+        CloseLauncher();
+        CloseActiveModMenu(ActiveMenu::OPS);
+        g_LastLauncherToggleMs.store(NowMs());
+        return;
+    }
+
+    CloseLauncher();
+    g_LastLauncherToggleMs.store(NowMs());
+    // Open via the author's intended SKSE mod event (no VM method call, no Papyrus reach-in). OPS's own
+    // plugin handles the open + camera correctly on its side.
+    SendOPSModEvent("OPS_NativePreviewOpen");
+    g_ActiveMenu.store(ActiveMenu::OPS);
+    g_MenuOpenLockUntilMs.store(NowMs() + 500);
+    SKSE::log::info("OpenOPS: sent OPS_NativePreviewOpen.");
+}
+
 static void OpenDebugMenu() {
     if (!g_DebugMenuConfig.enabled || g_DebugMenuConfig.toggleDIK == 0) {
         SKSE::log::warn("OpenDebugMenu: DebugMenu hotkey is not configured.");
+        return;
+    }
+
+    ResolveDebugMenuApi("OpenDebugMenu");
+
+    if (g_DebugMenuConfig.setMenuOpen) {
+        CloseLauncher();
+        g_LastLauncherToggleMs.store(NowMs());
+
+        const bool open = g_DebugMenuConfig.isMenuOpen
+            ? g_DebugMenuConfig.isMenuOpen()
+            : (g_ActiveMenu.load() == ActiveMenu::DebugMenu);
+
+        if (open) {
+            g_DebugMenuConfig.setMenuOpen(false);
+            g_ActiveMenu.store(ActiveMenu::None);
+            SKSE::log::info("OpenDebugMenu: closed Debug Menu via exported SetMenuOpen(false).");
+            return;
+        }
+
+        if (g_DebugMenuConfig.setHotkeysEnabled && !g_UnblockDebugMenu.load()) {
+            g_DebugMenuConfig.setHotkeysEnabled(false);
+            SKSE::log::info("OpenDebugMenu: disabled Debug Menu native hotkey via exported SetHotkeyEnabled(false).");
+        }
+
+        g_DebugMenuConfig.setMenuOpen(true);
+        g_ActiveMenu.store(ActiveMenu::DebugMenu);
+        g_MenuOpenLockUntilMs.store(NowMs() + 500);
+        SKSE::log::info("OpenDebugMenu: opened Debug Menu via exported SetMenuOpen(true).");
         return;
     }
 
@@ -5448,12 +6111,19 @@ static void SyncSearchUIKey() {
 }
 
 // Open SearchUI's search from the launcher by injecting its current key (F18 once freed, else F4)
-// so its Papyrus OnKeyDown fires. SearchUI has its own built-in Tab key to close its prompt, so we
-// deliberately do NOT track it as a closeable active menu or try to close it on Esc/F1 - the user
-// closes it with Tab. (Esc/F1 close never worked for SearchUI's Scaleform prompt anyway.)
+// so its Papyrus OnKeyDown fires. SearchUI has no close API; its UITextEntryMenu closes natively
+// with Tab, which is also the path used by Risa for F1/ESC close.
 static void OpenSearchUI() {
+    if (g_ActiveMenu.load() == ActiveMenu::SearchUI) {
+        CloseLauncher();
+        CloseActiveModMenu(ActiveMenu::SearchUI);
+        g_LastLauncherToggleMs.store(NowMs());
+        return;
+    }
     CloseLauncher();
     g_LastLauncherToggleMs.store(NowMs());
+    g_ActiveMenu.store(ActiveMenu::SearchUI);
+    g_MenuOpenLockUntilMs.store(NowMs() + 350);
     g_AllowSearchUIOpen.store(true);
     g_AllowSearchUIOpenUntilMs.store(NowMs() + 1000);
     const WORD dik = static_cast<WORD>(g_SearchUIEffectiveDIK.load());
@@ -5656,81 +6326,6 @@ static bool SetCatMenuOpen(bool open) {
     return true;
 }
 
-static bool SetDragonbornOpenLegacy(bool open) {
-    HMODULE module = ::GetModuleHandleA("SkyrimCheatMenu.dll");
-    if (!module) return false;
-
-    using SetMenuOpen_t = void(*)(bool);
-    static SetMenuOpen_t resolved = nullptr;
-    if (!resolved) {
-        auto* base = reinterpret_cast<std::uint8_t*>(module);
-        auto* dos = reinterpret_cast<IMAGE_DOS_HEADER*>(base);
-        if (dos->e_magic != IMAGE_DOS_SIGNATURE) return false;
-        auto* nt = reinterpret_cast<IMAGE_NT_HEADERS64*>(base + dos->e_lfanew);
-        if (nt->Signature != IMAGE_NT_SIGNATURE) return false;
-
-        // Dragonborn's Toolkit ships its PDB. This signature identifies its private
-        // SetMenuOpen(bool), which performs cursor, pause and inspector transitions.
-        static constexpr std::array<int, 36> pattern{
-            0x53, 0x48, 0x83, 0xEC, 0x40,
-            0x48, 0x8B, 0x05, -1, -1, -1, -1,
-            0x48, 0x33, 0xC4,
-            0x48, 0x89, 0x44, 0x24, 0x38,
-            0x0F, 0xB6, 0xC1,
-            0x0F, 0xB6, 0xD9,
-            0x86, 0x05, -1, -1, -1, -1,
-            0x84, 0xC9, 0x74, -1
-        };
-
-        std::uint8_t* match = nullptr;
-        std::size_t matches = 0;
-        const auto* section = IMAGE_FIRST_SECTION(nt);
-        for (WORD s = 0; s < nt->FileHeader.NumberOfSections; ++s) {
-            if ((section[s].Characteristics & IMAGE_SCN_MEM_EXECUTE) == 0) continue;
-            auto* begin = base + section[s].VirtualAddress;
-            const std::size_t size = section[s].Misc.VirtualSize;
-            if (size < pattern.size()) continue;
-            for (std::size_t i = 0; i <= size - pattern.size(); ++i) {
-                bool same = true;
-                for (std::size_t p = 0; p < pattern.size(); ++p) {
-                    if (pattern[p] >= 0 && begin[i + p] != static_cast<std::uint8_t>(pattern[p])) {
-                        same = false;
-                        break;
-                    }
-                }
-                if (same) {
-                    match = begin + i;
-                    ++matches;
-                }
-            }
-        }
-
-        if (matches == 1) {
-            resolved = reinterpret_cast<SetMenuOpen_t>(match);
-            SKSE::log::info("SetDragonbornOpen: resolved SetMenuOpen by signature at RVA 0x{:X}.",
-                static_cast<std::size_t>(match - base));
-        } else {
-            // The known function may already be detoured, which replaces its signature.
-            // Trust the PDB RVA only for the exact DLL build it was derived from.
-            constexpr DWORD kSupportedTimestamp = 0x6A3EBC4B;
-            constexpr DWORD kSupportedImageSize = 0x169000;
-            if (nt->FileHeader.TimeDateStamp == kSupportedTimestamp &&
-                nt->OptionalHeader.SizeOfImage == kSupportedImageSize) {
-                resolved = reinterpret_cast<SetMenuOpen_t>(base + 0x19260);
-                SKSE::log::warn("SetDragonbornOpen: signature matches={}, using verified PDB RVA for build {:08X}/0x{:X}.",
-                    matches, nt->FileHeader.TimeDateStamp, nt->OptionalHeader.SizeOfImage);
-            } else {
-                SKSE::log::error("SetDragonbornOpen: unsupported build timestamp={:08X}, imageSize=0x{:X}, signature matches={}.",
-                    nt->FileHeader.TimeDateStamp, nt->OptionalHeader.SizeOfImage, matches);
-                return false;
-            }
-        }
-    }
-
-    resolved(open);
-    return true;
-}
-
 static DBTK_API::IVDBTK1* GetDragonbornToolkitApi() {
     static std::atomic<DBTK_API::IVDBTK1*> api{ nullptr };
     static std::atomic<bool> unavailableLogged{ false };
@@ -5739,7 +6334,7 @@ static DBTK_API::IVDBTK1* GetDragonbornToolkitApi() {
     auto* resolved = DBTK_API::GetAPI();
     if (!resolved) {
         if (!unavailableLogged.exchange(true)) {
-            SKSE::log::warn("Dragonborn's Toolkit API: RequestPluginAPI v1 unavailable; using the legacy compatibility path.");
+            SKSE::log::warn("Dragonborn's Toolkit API: RequestPluginAPI v1 unavailable; Dragonborn integration disabled.");
         }
         return nullptr;
     }
@@ -5769,7 +6364,25 @@ static bool SetDragonbornOpen(bool open) {
             open ? "OPEN" : "CLOSE", before, after, after == open);
         return true;
     }
-    return SetDragonbornOpenLegacy(open);
+    SKSE::log::warn("Dragonborn's Toolkit API: public open/close API unavailable; refusing private fallback.");
+    return false;
+}
+
+// Dragonborn's Toolkit v0.5+ exposes a runtime hotkey switch as a plain-C export. Calling it with
+// false disables the toolkit's own key listener live - no SkyrimCheatMenu.json edit, no restart -
+// so its key is free while the launcher drives open/close through the API. Returns false when the
+// export is missing (older build), letting callers fall back to the JSON edit.
+static bool SetDragonbornHotkeyEnabled(bool enabled) {
+    HMODULE module = ::GetModuleHandleA("SkyrimCheatMenu.dll");
+    if (!module) return false;
+    using SetHotkeyEnabled_t = void (*)(bool);
+    auto* fn = reinterpret_cast<SetHotkeyEnabled_t>(
+        ::GetProcAddress(module, "DragonbornsToolkit_SetHotkeyEnabled"));
+    if (!fn) return false;
+    fn(enabled);
+    SKSE::log::info("Dragonborn's Toolkit API: SetHotkeyEnabled({}) via runtime C export.",
+        enabled ? "true" : "false");
+    return true;
 }
 
 static void OpenDragonbornToolkit() {
@@ -5887,6 +6500,9 @@ static bool HandleLauncherHotkeys(RE::InputEvent* ev, const char* source) {
             TryManageKreatEHotkey(true);
             TryManageCSHotkey(true);
             TryManageCatMenuHotkey(true);
+            TryManageModFunctionMenuHotkey(true);
+            TryManageFLICKHotkey(true);
+            TryManageOPSHotkey(true);
             TryManageDragonbornHotkey(true);
             SyncDMenuKeyViaApi();
             SyncSearchUIKey();  // mirror here too so it fires under ReShade (DI poll is dead there)
@@ -6105,7 +6721,7 @@ static void LogStartupDiagnostics() {
     SKSE::log::info("CatMenu: detected={}, native listener={}, original F6={}, JSON managed={}",
         g_CatMenuConfig.enabled, g_CatMenuKeyHookInstalled.load() ? "disabled (keyless)" : "NOT DISABLED",
         g_UnblockCatMenu.load() ? "enabled" : "disabled", g_CatMenuIniManaged.load());
-    SKSE::log::info("Dragonborn's Toolkit: detected={}, key={}, original F1={}, JSON managed={}",
+    SKSE::log::info("Dragonborn's Toolkit: detected={}, key={}, original F1={}, hotkey managed={}",
         g_DragonbornConfig.enabled, g_DragonbornConfig.enabled ? FormatHotkey(g_DragonbornConfig.toggleDIK) : "N/A",
         g_UnblockDragonborn.load() ? "enabled" : "disabled", g_DragonbornIniManaged.load());
     SKSE::log::info("ReShade: detected={}, key={}, original Home={}", g_ReShadeConfig.enabled,
@@ -6133,10 +6749,15 @@ static void CopyToClipboard(const std::string& text);
 
 // A sliding on/off toggle switch (SKSE Menu Framework has no built-in one, so draw it). Returns true
 // when clicked and flips *v. Green = on (excluded), grey = off (managed).
-static bool SlideToggle(const char* id, bool* v, bool enabled = true) {
+static bool SlideToggle(const char* id, bool* v, bool enabled = true, float layoutScale = 1.0f,
+    float heightMult = 0.90f, float minHUnits = 22.0f, float widthMult = 1.85f) {
     ImGuiMCP::ImVec2 p; ImGuiMCP::GetCursorScreenPos(&p);
-    const float h = ImGuiMCP::GetFrameHeight() * 0.80f;
-    const float w = h * 1.85f;
+    // Match the active ImGui frame height so the switch grows with the row's visible controls.
+    // Keep a floor based on UI Scale so tiny Font Scale values don't make the switch unreadable.
+    float h = ImGuiMCP::GetFrameHeight() * heightMult;
+    const float minH = minHUnits * layoutScale;
+    if (h < minH) h = minH;
+    const float w = h * widthMult;
     const float r = h * 0.5f;
     const bool clicked = enabled && ImGuiMCP::InvisibleButton(id, ImGuiMCP::ImVec2(w, h));
     if (clicked) *v = !*v;
@@ -6160,8 +6781,9 @@ static bool SlideToggle(const char* id, bool* v, bool enabled = true) {
 }
 
 static void DrawExclusionsModals() {
-    const float uiScale = g_LauncherFontScale.load();
-    const float layoutScale = uiScale / 0.9f;
+    const float baseUiScale = g_LauncherFontScale.load();
+    const float uiScale = LanguageFontScale(baseUiScale * g_LauncherTextScale.load());
+    const float layoutScale = baseUiScale / 0.9f;
 
     ImGuiMCP::ImVec2 center;
     if (auto* viewport = ImGuiMCP::GetMainViewport()) {
@@ -6175,26 +6797,26 @@ static void DrawExclusionsModals() {
     ImGuiMCP::PushStyleVar(ImGuiMCP::ImGuiStyleVar_ButtonTextAlign, ImGuiMCP::ImVec2(0.5f, 0.5f));
     ImGuiMCP::PushStyleVar(ImGuiMCP::ImGuiStyleVar_WindowTitleAlign, ImGuiMCP::ImVec2(0.5f, 0.5f));
 
-    if (ImGuiMCP::BeginPopupModal("Confirm Exclusions", nullptr, ImGuiMCP::ImGuiWindowFlags_AlwaysAutoResize)) {
+    if (ImGuiMCP::BeginPopupModal(Tr("popup.exclusions.title", "Confirm Exclusions"), nullptr, ImGuiMCP::ImGuiWindowFlags_AlwaysAutoResize)) {
         g_ExclusionsPopupOpen = true;
         ImGuiMCP::SetWindowFontScale(uiScale);
         if (g_ExclusionStep == 0 || g_ExclusionStep == 1) {
             if (g_ExclusionsDetailText.empty()) {
                 // Only re-includes (un-excludes) this time - nothing to restore, so just confirm.
-                ImGuiMCP::TextWrapped("These mods will be managed by Risa again (their hotkeys relocated). "
-                                      "A restart is recommended afterward so they reload cleanly.");
+                ImGuiMCP::TextWrapped("%s", Tr("popup.exclusions.reinclude_body",
+                    "These mods will be managed by Risa again (their hotkeys relocated). A restart is recommended afterward so they reload cleanly."));
                 ImGuiMCP::Separator();
-                if (ImGuiMCP::Button("Apply", ImGuiMCP::ImVec2(-1.0f, 0.0f))) {
+                if (ButtonFit(Tr("button.apply", "Apply"), ImGuiMCP::ImVec2(-1.0f, 0.0f), uiScale)) {
                     CommitExclusions(false);
                     g_ExclusionStep = 2;
                 }
-                if (ImGuiMCP::Button("Cancel", ImGuiMCP::ImVec2(-1.0f, 0.0f))) {
+                if (ButtonFit(Tr("button.cancel", "Cancel"), ImGuiMCP::ImVec2(-1.0f, 0.0f), uiScale)) {
                     ImGuiMCP::CloseCurrentPopup();
                     g_ExclusionStep = 0;
                     g_ExclusionsPopupOpen = false;
                 }
             } else {
-            ImGuiMCP::TextWrapped("Confirm the keys that will be restored for your excluded mods:");
+            ImGuiMCP::TextWrapped("%s", Tr("popup.exclusions.restore_preview_intro", "Confirm the keys that will be restored for your excluded mods:"));
             ImGuiMCP::Spacing();
 
             ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_ChildBg, ImGuiMCP::ImVec4(0.06f, 0.06f, 0.08f, 1.0f));
@@ -6210,22 +6832,22 @@ static void DrawExclusionsModals() {
             float copyBtnW = 120.0f * layoutScale;
             ImGuiMCP::ImVec2 avail; ImGuiMCP::GetContentRegionAvail(&avail);
             ImGuiMCP::SetCursorPosX(avail.x - copyBtnW);
-            std::string copyBtnLabel = (FontAwesome::UnicodeToUtf8(0xf0c5) + " Copy Info") + "##CopyExclusionsText";
-            if (ImGuiMCP::Button(copyBtnLabel.c_str(), ImGuiMCP::ImVec2(copyBtnW, 0.0f))) {
+            std::string copyBtnLabel = (FontAwesome::UnicodeToUtf8(0xf0c5) + " " + Tr("button.copy_info", "Copy Info")) + "##CopyExclusionsText";
+            if (ButtonFit(copyBtnLabel.c_str(), ImGuiMCP::ImVec2(copyBtnW, 0.0f), uiScale)) {
                 CopyToClipboard(g_ExclusionsDetailText);
             }
 
             ImGuiMCP::Separator();
 
-            if (ImGuiMCP::Button("Return to User Defaults", ImGuiMCP::ImVec2(-1.0f, 0.0f))) {
+            if (ButtonFit(Tr("button.return_user_defaults", "Return to User Defaults"), ImGuiMCP::ImVec2(-1.0f, 0.0f), uiScale)) {
                 CommitExclusions(true); // Restores user-original captured values
                 g_ExclusionStep = 2;   // Proceed to Exit Game option
             }
-            if (ImGuiMCP::Button("Return to Mod Defaults", ImGuiMCP::ImVec2(-1.0f, 0.0f))) {
+            if (ButtonFit(Tr("button.return_mod_defaults", "Return to Mod Defaults"), ImGuiMCP::ImVec2(-1.0f, 0.0f), uiScale)) {
                 CommitExclusions(false); // Restores mod author defaults
                 g_ExclusionStep = 2;    // Proceed to Exit Game option
             }
-            if (ImGuiMCP::Button("Cancel", ImGuiMCP::ImVec2(-1.0f, 0.0f))) {
+            if (ButtonFit(Tr("button.cancel", "Cancel"), ImGuiMCP::ImVec2(-1.0f, 0.0f), uiScale)) {
                 ImGuiMCP::CloseCurrentPopup();
                 g_ExclusionStep = 0;
                 g_ExclusionsPopupOpen = false;
@@ -6233,7 +6855,8 @@ static void DrawExclusionsModals() {
             }
         }
         else if (g_ExclusionStep == 2) {
-            ImGuiMCP::TextWrapped("Changes applied successfully! It is highly recommended to restart Skyrim so the mods reload their native configurations cleanly.");
+            ImGuiMCP::TextWrapped("%s", Tr("popup.exclusions.success_body",
+                "Changes applied successfully! It is highly recommended to restart Skyrim so the mods reload their native configurations cleanly."));
             ImGuiMCP::Separator();
 
             float btnW = 150.0f * layoutScale;
@@ -6244,14 +6867,14 @@ static void DrawExclusionsModals() {
             float availW = avail.x;
             ImGuiMCP::SetCursorPosX((availW - totalW) * 0.5f);
 
-            if (ImGuiMCP::Button("Exit Game Now", ImGuiMCP::ImVec2(btnW, 0.0f))) {
+            if (ButtonFit(Tr("button.exit_game_now", "Exit Game Now"), ImGuiMCP::ImVec2(btnW, 0.0f), uiScale)) {
                 if (auto* consoleLog = RE::ConsoleLog::GetSingleton()) {
                     consoleLog->Print("Exiting game...");
                 }
                 std::exit(0); // Exit process cleanly
             }
             ImGuiMCP::SameLine(0.0f, spacing);
-            if (ImGuiMCP::Button("Continue Playing", ImGuiMCP::ImVec2(btnW, 0.0f))) {
+            if (ButtonFit(Tr("button.continue_playing", "Continue Playing"), ImGuiMCP::ImVec2(btnW, 0.0f), uiScale)) {
                 ImGuiMCP::CloseCurrentPopup();
                 g_ExclusionStep = 0; // Reset step
                 g_ExclusionsPopupOpen = false;
@@ -6268,8 +6891,9 @@ static void DrawExclusionsModals() {
 }
 
 static void DrawExclusionsTabContent() {
-    const float uiScale = g_LauncherFontScale.load();
-    const float layoutScale = uiScale / 0.9f;
+    const float baseUiScale = g_LauncherFontScale.load();
+    const float uiScale = LanguageFontScale(baseUiScale * g_LauncherTextScale.load());
+    const float layoutScale = baseUiScale / 0.9f;
 
     // Sync the working copy from the committed state each time the tab is (re)entered. g_ExclusionsActive
     // still holds LAST frame's tab state here (it's updated after this draws), so when it's false the tab
@@ -6293,10 +6917,11 @@ static void DrawExclusionsTabContent() {
         }
     };
 
-    // 1. Top Panel: Apply Button
+    // 1. Top Panel: description + Apply button. Keep the button inside the tab even
+    // when translated text or normal menu width leaves no same-line room.
     ImGuiMCP::AlignTextToFramePadding();
-    ImGuiMCP::TextColored(ImGuiMCP::ImVec4(1.0f, 0.70f, 0.20f, 1.0f), "Excluding mods releases their keys back to the game.");
-    ImGuiMCP::SameLine(0.0f, 20.0f * layoutScale);
+    ImGuiMCP::TextColored(ImGuiMCP::ImVec4(1.0f, 0.70f, 0.20f, 1.0f), "%s",
+        Tr("exclusions.description", "Excluding mods releases their keys back to the game."));
 
     bool hasChanges = false;
     for (int i = 0; i < AI_COUNT; ++i) {
@@ -6314,7 +6939,17 @@ static void DrawExclusionsTabContent() {
         ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_Text,           ImGuiMCP::ImVec4(0.35f, 0.35f, 0.38f, 0.7f));
     }
 
-    if (ImGuiMCP::Button("Apply Changes##ApplyExclusions", ImGuiMCP::ImVec2(135.0f * layoutScale, 0.0f))) {
+    const std::string applyExclusionsLabel = TrLabel("button.apply_changes", "Apply Changes", "##ApplyExclusions");
+    ImGuiMCP::ImVec2 exclusionsApplyAvail;
+    ImGuiMCP::GetContentRegionAvail(&exclusionsApplyAvail);
+    float applyButtonW = 135.0f * layoutScale;
+    if (applyButtonW > exclusionsApplyAvail.x) {
+        applyButtonW = exclusionsApplyAvail.x;
+    }
+    if (exclusionsApplyAvail.x > applyButtonW) {
+        ImGuiMCP::SetCursorPosX(ImGuiMCP::GetCursorPosX() + (exclusionsApplyAvail.x - applyButtonW));
+    }
+    if (ButtonFit(applyExclusionsLabel.c_str(), ImGuiMCP::ImVec2(applyButtonW, 0.0f), uiScale)) {
         int changeCount = 0;
         g_ExclusionsDetailText = "";
         for (int i = 0; i < AI_COUNT; ++i) {
@@ -6328,15 +6963,18 @@ static void DrawExclusionsTabContent() {
                 std::string userKey = GetBackupKeyString(i, false);
                 std::string modKey = GetBackupKeyString(i, true);
                 g_ExclusionsDetailText += std::format(
-                    "=== {} ===\n\nRestoring Keybinds:\n  - User Original: {}\n  - Mod Default: {}\n\n",
-                    GetModDisplayName(i), userKey, modKey);
+                    "{} {} {}\n\n{}:\n  - {}: {}\n  - {}: {}\n\n",
+                    Tr("exclusions.detail.decorator", "==="), GetModDisplayName(i), Tr("exclusions.detail.decorator", "==="),
+                    Tr("exclusions.detail.restoring_keybinds", "Restoring Keybinds"),
+                    Tr("exclusions.detail.user_original", "User Original"), userKey.empty() ? Tr("exclusions.detail.none_captured", "(none captured)") : userKey,
+                    Tr("exclusions.detail.mod_default", "Mod Default"), modKey.empty() ? Tr("exclusions.detail.unknown", "(unknown)") : modKey);
             }
         }
         // Always route through the confirmation popup - never commit here. Committing in the button
         // triggered the "restart required" notice, which took over the window before the popup could run.
         if (changeCount > 0) {
             g_ExclusionStep = 1;
-            ImGuiMCP::OpenPopup("Confirm Exclusions");
+            ImGuiMCP::OpenPopup(Tr("popup.exclusions.title", "Confirm Exclusions"));
         }
     }
 
@@ -6372,19 +7010,21 @@ static void DrawExclusionsTabContent() {
 
     // 5 columns (Mod | spacer | Current Hotkey | spacer | Exclude) to match the Settings tab's spacing.
     if (ImGuiMCP::BeginTable("ExclusionsTbl", 5, ImGuiMCP::ImGuiTableFlags_SizingStretchProp)) {
-        ImGuiMCP::TableSetupColumn("Mod", ImGuiMCP::ImGuiTableColumnFlags_WidthFixed, 200.0f * layoutScale);
+        ImGuiMCP::TableSetupColumn(Tr("table.mod", "Mod"), ImGuiMCP::ImGuiTableColumnFlags_WidthFixed, 200.0f * layoutScale);
         ImGuiMCP::TableSetupColumn("##esp1", ImGuiMCP::ImGuiTableColumnFlags_WidthStretch, 1.0f);
-        ImGuiMCP::TableSetupColumn("Current Hotkey", ImGuiMCP::ImGuiTableColumnFlags_WidthFixed, 150.0f * layoutScale);
+        ImGuiMCP::TableSetupColumn(Tr("table.current_hotkey", "Current Hotkey"), ImGuiMCP::ImGuiTableColumnFlags_WidthFixed, 150.0f * layoutScale);
         ImGuiMCP::TableSetupColumn("##esp2", ImGuiMCP::ImGuiTableColumnFlags_WidthStretch, 1.0f);
-        ImGuiMCP::TableSetupColumn("Exclude", ImGuiMCP::ImGuiTableColumnFlags_WidthFixed, 72.0f * layoutScale);
+        ImGuiMCP::TableSetupColumn(Tr("table.exclude", "Exclude"), ImGuiMCP::ImGuiTableColumnFlags_WidthFixed, 72.0f * layoutScale);
 
         // Manual header row placed in the SAME columns as the data (0/2/4) so the labels line up with the
         // values below - TableHeadersRow let the narrow "Exclude" header overflow off the right edge.
         ImGuiMCP::TableNextRow(ImGuiMCP::ImGuiTableRowFlags_Headers, 0.0f);
-        ImGuiMCP::TableSetColumnIndex(0); ImGuiMCP::TableHeader("Mod");
-        ImGuiMCP::TableSetColumnIndex(2); ImGuiMCP::TableHeader("Current Hotkey");
-        ImGuiMCP::TableSetColumnIndex(4); ImGuiMCP::TableHeader("Exclude");
+        ImGuiMCP::TableSetColumnIndex(0); ImGuiMCP::TableHeader(Tr("table.mod", "Mod"));
+        ImGuiMCP::TableSetColumnIndex(2); ImGuiMCP::TableHeader(Tr("table.current_hotkey", "Current Hotkey"));
+        ImGuiMCP::TableSetColumnIndex(4); ImGuiMCP::TableHeader(Tr("table.exclude", "Exclude"));
 
+        // Build the visible list (installed primary mods only), then show it alphabetically by name.
+        std::vector<int> exclOrder;
         for (int i = 0; i < AI_COUNT; ++i) {
             // Filter sub-aliases and MCM out of the main exclusions tab - only show primary mods
             if (i == AI_CSEditor || i == AI_CSOverlay || i == AI_CSEffect ||
@@ -6392,9 +7032,14 @@ static void DrawExclusionsTabContent() {
                 i == AI_MCM) {
                 continue;
             }
-
             if (!IsModInstalled(i)) continue;
+            exclOrder.push_back(i);
+        }
+        std::sort(exclOrder.begin(), exclOrder.end(), [](int a, int b) {
+            return _stricmp(GetModDisplayName(a), GetModDisplayName(b)) < 0;
+        });
 
+        for (int i : exclOrder) {
             ImGuiMCP::TableNextRow(0, 32.0f * layoutScale);
 
             // Column 0: Mod Name (friendly)
@@ -6406,14 +7051,12 @@ static void DrawExclusionsTabContent() {
             ImGuiMCP::TableSetColumnIndex(2);
             ImGuiMCP::AlignTextToFramePadding();
             if (ModHasNoNativeKey(i)) {
-                ImGuiMCP::TextDisabled("None");
-                SmallTooltip("This mod does not have a default hotkey of its own; it is only opened from the launcher.");
+                ImGuiMCP::TextDisabled("%s", Tr("hotkey.none", "None"));
             } else {
                 std::string currentKeyStr;
                 if (g_ExcludeMod[i].load()) {
                     currentKeyStr = GetModNativeHotkeyString(i);
                     ImGuiMCP::TextDisabled("%s", currentKeyStr.c_str());
-                    SmallTooltip("This mod is excluded. Its default game hotkey has been restored.");
                 } else {
                     std::string prefix = "";
                     if (g_AliasCtrl[i].load()) prefix += "Ctrl + ";
@@ -6421,23 +7064,27 @@ static void DrawExclusionsTabContent() {
                     if (g_AliasAlt[i].load()) prefix += "Alt + ";
                     currentKeyStr = prefix + NameFromDIK(g_AliasDik[i].load());
                     if (currentKeyStr.empty() || currentKeyStr == "None") {
-                        currentKeyStr = "None";
+                        currentKeyStr = Tr("hotkey.none", "None");
                         ImGuiMCP::TextDisabled("%s", currentKeyStr.c_str());
                     } else {
                         ImGuiMCP::Text("%s", currentKeyStr.c_str());
                     }
-                    SmallTooltip("This mod is managed by Risa. It will open using Risa's custom hotkey.");
                 }
             }
 
             // Column 4: Exclude slide toggle, right-aligned so it stays at the row's right edge.
             ImGuiMCP::TableSetColumnIndex(4);
             bool excluded = g_TempExcludeState[i];
-            const float toggleW = ImGuiMCP::GetFrameHeight() * 0.80f * 1.85f;
+            float exclusionsToggleH = ImGuiMCP::GetFrameHeight() * 0.90f;
+            const float exclusionsMinToggleH = 22.0f * layoutScale;
+            if (exclusionsToggleH < exclusionsMinToggleH) exclusionsToggleH = exclusionsMinToggleH;
+            const float toggleW = exclusionsToggleH * 1.85f;
             ImGuiMCP::ImVec2 colAvail; ImGuiMCP::GetContentRegionAvail(&colAvail);
-            if (colAvail.x > toggleW) ImGuiMCP::SetCursorPosX(ImGuiMCP::GetCursorPosX() + (colAvail.x - toggleW));
+            if (colAvail.x > toggleW + 4.0f * layoutScale) {
+                ImGuiMCP::SetCursorPosX(ImGuiMCP::GetCursorPosX() + (colAvail.x - toggleW - 4.0f * layoutScale));
+            }
             std::string toggleId = std::string("##exclude_") + g_AliasIds[i];
-            if (SlideToggle(toggleId.c_str(), &excluded)) {
+            if (SlideToggle(toggleId.c_str(), &excluded, true, layoutScale)) {
                 g_TempExcludeState[i] = excluded;
 
                 // If this is a parent mod like CS or PartySettings, cascade the temp state to its child aliases
@@ -6521,9 +7168,11 @@ static void __stdcall RenderLauncher() {
                     ImGuiMCP::ImGuiWindowFlags_NoScrollbar |
                     ImGuiMCP::ImGuiWindowFlags_NoSavedSettings;
 
-        if (ImGuiMCP::Begin("Risa's Notification###RisaMenuNotification", nullptr, flags)) {
-            const float uiScale = g_LauncherFontScale.load();
-            const float layoutScale = uiScale / 0.9f;
+        const std::string notificationTitle = TrLabel("notification.window_title", "Risa's Notification", "###RisaMenuNotification");
+        if (ImGuiMCP::Begin(notificationTitle.c_str(), nullptr, flags)) {
+            const float baseUiScale = g_LauncherFontScale.load();
+            const float uiScale = LanguageFontScale(baseUiScale * g_LauncherTextScale.load());
+            const float layoutScale = baseUiScale / 0.9f;
             ImGuiMCP::SetWindowFontScale(uiScale);
 
             ImGuiMCP::PushStyleVar(ImGuiMCP::ImGuiStyleVar_ButtonTextAlign, ImGuiMCP::ImVec2(0.0f, 0.5f));
@@ -6537,11 +7186,11 @@ static void __stdcall RenderLauncher() {
 
             // Mod name header so players know which mod this notification is from.
             ImGuiMCP::TextColored(ImGuiMCP::ImVec4(0.36f, 0.58f, 0.86f, 1.0f * fade),
-                "Risa's All In One Menu");
+                "%s", Tr("menu.mod_name", "Risa's All In One Menu"));
             ImGuiMCP::Separator();
             ImGuiMCP::TextColored(ImGuiMCP::ImVec4(1.00f, 0.65f, 0.30f, 1.0f * fade),
-                "Mod hotkey configuration updated");
-            ImGuiMCP::Text("Restart Skyrim for the changes to take effect.");
+                "%s", Tr("notification.hotkeys_updated", "Mod hotkey configuration updated"));
+            ImGuiMCP::Text("%s", Tr("notification.restart_required", "Restart Skyrim for the changes to take effect."));
 
             ImGuiMCP::PopStyleColor(2);
             ImGuiMCP::PopStyleVar(3);
@@ -6550,8 +7199,10 @@ static void __stdcall RenderLauncher() {
         ImGuiMCP::PopStyleVar(2);
         ImGuiMCP::PopStyleColor(4);
 
-        if (auto* w = ImGuiMCP::FindWindowByName("###RisaMenuNotification"))
-            ImGuiMCP::BringWindowToDisplayFront(w);
+        if (NowMs() >= g_LanguageComboActiveUntilMs.load()) {
+            if (auto* w = ImGuiMCP::FindWindowByName("###RisaMenuNotification"))
+                ImGuiMCP::BringWindowToDisplayFront(w);
+        }
 
         return;
     }
@@ -6644,9 +7295,9 @@ static void __stdcall RenderLauncher() {
     // Title reflects the current view so players know which mod a sub-hub belongs to. The "###" keeps
     // a STABLE window id ("RisaMenuLauncher") regardless of the visible label, so position/size persist.
     const int titleSub = restartPrompt ? 0 : g_LauncherSubView.load();
-    const char* titleText = (titleSub == 1 && g_CSConfig.enabled)        ? "Community Shaders"
-                          : (titleSub == 2 && g_PartySheetConfig.enabled) ? "Skyrim Party Sheet"
-                          :                                                  "Risa's Menu Launcher";
+    const char* titleText = (titleSub == 1 && g_CSConfig.enabled)        ? Tr("mod.community_shaders", "Community Shaders")
+                          : (titleSub == 2 && g_PartySheetConfig.enabled) ? Tr("mod.skyrim_party_sheet", "Skyrim Party Sheet")
+                          :                                                  Tr("menu.launcher_title", "Risa's Menu Launcher");
     const std::string windowTitle = std::string(titleText) + "###RisaMenuLauncher";
     // Center the window title. WindowTitleAlign is read during Begin, so scope the push tightly
     // around it and pop right after (keeps the outer style-var bookkeeping unchanged).
@@ -6693,31 +7344,24 @@ static void __stdcall RenderLauncher() {
         ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_PopupBg, ImGuiMCP::ImVec4(0.08f, 0.08f, 0.10f, 1.0f));
         if (ImGuiMCP::BeginPopup("RisaHelpPopup")) {
             ImGuiMCP::PushTextWrapPos(440.0f * layoutScale);
-            ImGuiMCP::TextColored(ImGuiMCP::ImVec4(0.40f, 0.62f, 1.00f, 1.0f), "RISA'S ALL IN ONE MENU - HELP");
+            ImGuiMCP::TextColored(ImGuiMCP::ImVec4(0.40f, 0.62f, 1.00f, 1.0f), "%s", Tr("help.title", "RISA'S ALL IN ONE MENU"));
             ImGuiMCP::Separator();
-            ImGuiMCP::TextColored(ImGuiMCP::ImVec4(1.00f, 0.65f, 0.30f, 1.0f), "Dragging & Window Controls:");
-            ImGuiMCP::Text("* Move Launcher: Left-click and drag this title bar header to reposition the window.");
-            ImGuiMCP::Text("* Resize Settings: Drag the bottom edge of the window in Settings/Exclusions tabs to adjust height.");
+            ImGuiMCP::TextColored(ImGuiMCP::ImVec4(1.00f, 0.65f, 0.30f, 1.0f), "%s", Tr("help.dragging.title", "Window"));
+            ImGuiMCP::Text("%s", Tr("help.dragging.move", "- Drag the title bar to move the launcher."));
+            ImGuiMCP::Text("%s", Tr("help.dragging.resize", "- Resize Settings and Exclusions from the bottom edge."));
             ImGuiMCP::Spacing();
-            ImGuiMCP::TextColored(ImGuiMCP::ImVec4(1.00f, 0.65f, 0.30f, 1.0f), "How Key Remap & Management Works:");
-            ImGuiMCP::Text("To prevent mod conflicts, Risa automatically intercepts and relocates mod hotkeys:");
-            ImGuiMCP::Text("1. Risa configures the mod's native files to bind to an unpressable key (e.g. F13-F24).");
-            ImGuiMCP::Text("2. When you press your custom keybind, Risa intercepts it and simulates the relocated key.");
-            ImGuiMCP::Text("This guarantees zero double-firing or clashing menus.");
+            ImGuiMCP::TextColored(ImGuiMCP::ImVec4(1.00f, 0.65f, 0.30f, 1.0f), "%s", Tr("help.remap.title", "Hotkeys"));
+            ImGuiMCP::Text("%s", Tr("help.remap.intro", "Risa keeps mod hotkeys from fighting each other. Managed mods may use a parked internal key while Risa's selected key opens the mod through its normal input or API path."));
             ImGuiMCP::Spacing();
-            ImGuiMCP::TextColored(ImGuiMCP::ImVec4(1.00f, 0.65f, 0.30f, 1.0f), "Advanced Bindings (Keyboard Button):");
-            ImGuiMCP::Text("Click the keyboard (⌨) button next to any key to open its Advanced settings:");
-            ImGuiMCP::Text("* Modifiers: Require Ctrl, Shift, and/or Alt keys to open.");
-            ImGuiMCP::Text("* Single Press: Default behavior (triggers instantly).");
-            ImGuiMCP::Text("* Double Press: Requires tapping the key twice quickly (within 300ms).");
-            ImGuiMCP::Text("* Hold to Trigger: Requires holding the key down for 0.5s.");
-            ImGuiMCP::Text("* Reset: Restores the mod's original default hotkey.");
+            ImGuiMCP::TextColored(ImGuiMCP::ImVec4(1.00f, 0.65f, 0.30f, 1.0f), "%s", Tr("help.advanced.title", "Advanced bindings"));
+            ImGuiMCP::Text("%s", Tr("help.advanced.intro", "Use the keyboard button beside a hotkey to configure modifiers, double-press, hold, or reset."));
+            ImGuiMCP::Text("%s", Tr("help.advanced.status", "A green keyboard button means that hotkey has custom advanced settings. Gray means it uses the default single-press behavior."));
             ImGuiMCP::Spacing();
-            ImGuiMCP::TextColored(ImGuiMCP::ImVec4(1.00f, 0.65f, 0.30f, 1.0f), "Mod Exclusions (Exclusions Tab):");
-            ImGuiMCP::Text("Exclude a mod to release it from Risa's management. Its native settings will be fully restored.");
+            ImGuiMCP::TextColored(ImGuiMCP::ImVec4(1.00f, 0.65f, 0.30f, 1.0f), "%s", Tr("help.exclusions.title", "Exclusions"));
+            ImGuiMCP::Text("%s", Tr("help.exclusions.body", "Excluding a mod stops Risa from managing it and restores its saved native settings."));
             ImGuiMCP::Spacing();
-            ImGuiMCP::TextColored(ImGuiMCP::ImVec4(1.00f, 0.65f, 0.30f, 1.0f), "Captured Settings & Backup:");
-            ImGuiMCP::Text("Under Settings Maintenance, you can restore all mod configurations to their original pre-Risa backups.");
+            ImGuiMCP::TextColored(ImGuiMCP::ImVec4(1.00f, 0.65f, 0.30f, 1.0f), "%s", Tr("help.backup.title", "Maintenance"));
+            ImGuiMCP::Text("%s", Tr("help.backup.body", "Restore Mod Defaults returns managed settings to the captured pre-Risa configuration."));
             ImGuiMCP::PopTextWrapPos();
             ImGuiMCP::EndPopup();
         }
@@ -6775,8 +7419,9 @@ static void __stdcall RenderLauncher() {
         ImGuiMCP::PopStyleVar(2); ImGuiMCP::PopStyleColor(4); ImGuiMCP::End(); return;
     }
 
-    const float uiScale = g_LauncherFontScale.load();
-    const float layoutScale = uiScale / 0.9f; // 0.9 preserves the launcher's original dimensions
+    const float baseUiScale = g_LauncherFontScale.load();
+    const float uiScale = LanguageFontScale(baseUiScale * g_LauncherTextScale.load());
+    const float layoutScale = baseUiScale / 0.9f; // 0.9 preserves the launcher's original dimensions
     const ImGuiMCP::ImVec2 launcherButtonSize(280.0f * layoutScale, 38.0f * layoutScale);
     ImGuiMCP::SetWindowFontScale(uiScale);
 
@@ -6799,6 +7444,11 @@ static void __stdcall RenderLauncher() {
     const bool hasMCM = IsMCMAvailable();
     const bool hasSearchUI = IsSearchUIAvailable();
     const bool hasQAR = IsQARInstalled();
+    const bool hasModFunctionMenu = g_ModFunctionMenuConfig.enabled;
+    const bool hasOPS = g_OPSConfig.enabled || IsOPSInstalled();
+    if (hasOPS && !g_OPSConfig.enabled) {
+        LoadOPSConfig();
+    }
 
     struct LauncherButton {
         std::string id;
@@ -6809,23 +7459,25 @@ static void __stdcall RenderLauncher() {
     };
 
     std::vector<LauncherButton> allButtons;
-    allButtons.push_back({ "MF", FontAwesome::UnicodeToUtf8(0xf013), "SKSE Menu Framework", OpenSKSEMenuFramework, hasMF });
-    allButtons.push_back({ "MCM", FontAwesome::UnicodeToUtf8(0xf1de), "Mod Configuration Menu", OpenMCM, hasMCM });
-    allButtons.push_back({ "SearchUI", FontAwesome::UnicodeToUtf8(0xf002), "SearchUI", OpenSearchUI, hasSearchUI });
-    allButtons.push_back({ "OAR", FontAwesome::UnicodeToUtf8(0xf144), "Open Animation Replacer", OpenAnimationReplacer, hasOAR });
-    allButtons.push_back({ "IED", FontAwesome::UnicodeToUtf8(0xf132), "Immersive Equipment Displays", OpenImmersiveEquipmentDisplays, hasIED });
-    allButtons.push_back({ "DebugMenu", FontAwesome::UnicodeToUtf8(0xf188), "Debug Menu", OpenDebugMenu, hasDebugMenu });
-    allButtons.push_back({ "dMenu", FontAwesome::UnicodeToUtf8(0xf520), "dMenu", OpenDMenu, hasDMenu });
-    allButtons.push_back({ "ImprovedCamera", FontAwesome::UnicodeToUtf8(0xf030), "Improved Camera SE", OpenImprovedCamera, hasImprovedCamera });
-    allButtons.push_back({ "ENB", FontAwesome::UnicodeToUtf8(0xf53f), "ENB Editor", OpenENB, hasENB });
-    allButtons.push_back({ "FLICK", FontAwesome::UnicodeToUtf8(0xf1b3), "FLICK", OpenFLICK, hasFLICK });
-    allButtons.push_back({ "KreatE", FontAwesome::UnicodeToUtf8(0xf6c3), "KreatE", OpenKreatE, hasKreatE });
-    allButtons.push_back({ "CS", FontAwesome::UnicodeToUtf8(0xf043), "Community Shaders", EnterCSHub, hasCS });
-    allButtons.push_back({ "PartySheet", FontAwesome::UnicodeToUtf8(0xf0c0), "Skyrim Party Sheet", EnterPartySheetHub, hasPartySheet });
-    allButtons.push_back({ "CatMenu", FontAwesome::UnicodeToUtf8(0xf6be), "CatMenu", OpenCatMenu, hasCatMenu });
-    allButtons.push_back({ "Dragonborn", FontAwesome::UnicodeToUtf8(0xf6d5), "Dragonborn's Toolkit", OpenDragonbornToolkit, hasDragonborn });
-    allButtons.push_back({ "ReShade", FontAwesome::UnicodeToUtf8(0xf5aa), "ReShade", OpenReShade, hasReShade });
-    allButtons.push_back({ "QAR", FontAwesome::UnicodeToUtf8(0xf553), "Quick Armor Rebalance", OpenQAR, hasQAR });
+    allButtons.push_back({ "MF", FontAwesome::UnicodeToUtf8(0xf013), Tr("mod.skse_menu_framework", "SKSE Menu Framework"), OpenSKSEMenuFramework, hasMF });
+    allButtons.push_back({ "MCM", FontAwesome::UnicodeToUtf8(0xf1de), Tr("mod.mod_configuration_menu", "Mod Configuration Menu"), OpenMCM, hasMCM });
+    allButtons.push_back({ "SearchUI", FontAwesome::UnicodeToUtf8(0xf002), Tr("mod.search_ui", "SearchUI"), OpenSearchUI, hasSearchUI });
+    allButtons.push_back({ "OAR", FontAwesome::UnicodeToUtf8(0xf144), Tr("mod.open_animation_replacer", "Open Animation Replacer"), OpenAnimationReplacer, hasOAR });
+    allButtons.push_back({ "IED", FontAwesome::UnicodeToUtf8(0xf132), Tr("mod.immersive_equipment_displays", "Immersive Equipment Displays"), OpenImmersiveEquipmentDisplays, hasIED });
+    allButtons.push_back({ "DebugMenu", FontAwesome::UnicodeToUtf8(0xf188), Tr("mod.debug_menu", "Debug Menu"), OpenDebugMenu, hasDebugMenu });
+    allButtons.push_back({ "dMenu", FontAwesome::UnicodeToUtf8(0xf520), Tr("mod.dmenu", "dMenu"), OpenDMenu, hasDMenu });
+    allButtons.push_back({ "ImprovedCamera", FontAwesome::UnicodeToUtf8(0xf030), Tr("mod.improved_camera", "Improved Camera SE"), OpenImprovedCamera, hasImprovedCamera });
+    allButtons.push_back({ "ENB", FontAwesome::UnicodeToUtf8(0xf53f), Tr("mod.enb_editor", "ENB Editor"), OpenENB, hasENB });
+    allButtons.push_back({ "FLICK", FontAwesome::UnicodeToUtf8(0xf1b3), Tr("mod.flick", "FLICK"), OpenFLICK, hasFLICK });
+    allButtons.push_back({ "KreatE", FontAwesome::UnicodeToUtf8(0xf6c3), Tr("mod.kreate", "KreatE"), OpenKreatE, hasKreatE });
+    allButtons.push_back({ "CS", FontAwesome::UnicodeToUtf8(0xf043), Tr("mod.community_shaders", "Community Shaders"), EnterCSHub, hasCS });
+    allButtons.push_back({ "PartySheet", FontAwesome::UnicodeToUtf8(0xf0c0), Tr("mod.skyrim_party_sheet", "Skyrim Party Sheet"), EnterPartySheetHub, hasPartySheet });
+    allButtons.push_back({ "CatMenu", FontAwesome::UnicodeToUtf8(0xf6be), Tr("mod.cat_menu", "CatMenu"), OpenCatMenu, hasCatMenu });
+    allButtons.push_back({ "Dragonborn", FontAwesome::UnicodeToUtf8(0xf6d5), Tr("mod.dragonborn_toolkit", "Dragonborn's Toolkit"), OpenDragonbornToolkit, hasDragonborn });
+    allButtons.push_back({ "ReShade", FontAwesome::UnicodeToUtf8(0xf5aa), Tr("mod.reshade", "ReShade"), OpenReShade, hasReShade });
+    allButtons.push_back({ "QAR", FontAwesome::UnicodeToUtf8(0xf553), Tr("mod.quick_armor_rebalance", "Quick Armor Rebalance"), OpenQAR, hasQAR });
+    allButtons.push_back({ "ModFunctionMenu", FontAwesome::UnicodeToUtf8(0xf0ae), Tr("mod.mod_function_menu", "Mod Function Menu"), OpenModFunctionMenu, hasModFunctionMenu });
+    allButtons.push_back({ "OPS", FontAwesome::UnicodeToUtf8(0xf508), Tr("mod.outfit_preview_selector", "Outfit Preview Selector"), OpenOPS, hasOPS });
 
     // Filter to active buttons sorted by g_ButtonOrder
     std::vector<LauncherButton> buttons;
@@ -6865,24 +7517,31 @@ static void __stdcall RenderLauncher() {
     if (restartPrompt) {
         // Mod name header so players know which mod this notification is from.
         ImGuiMCP::TextColored(ImGuiMCP::ImVec4(0.36f, 0.58f, 0.86f, 1.0f),
-            "Risa's All In One Menu");
+            "%s", Tr("menu.mod_name", "Risa's All In One Menu"));
         ImGuiMCP::Separator();
         ImGuiMCP::TextColored(ImGuiMCP::ImVec4(1.00f, 0.65f, 0.30f, 1.0f),
-            "Mod hotkey configuration updated");
-        ImGuiMCP::Text("Restart Skyrim for the changes to take effect.");
+            "%s", Tr("notification.hotkeys_updated", "Mod hotkey configuration updated"));
+        ImGuiMCP::Text("%s", Tr("notification.restart_required", "Restart Skyrim for the changes to take effect."));
 
         ImGuiMCP::PopStyleVar(3);
         ImGuiMCP::PopStyleColor(3);
         ImGuiMCP::End();
         ImGuiMCP::PopStyleVar(2);
         ImGuiMCP::PopStyleColor(4);
-        if (auto* w = ImGuiMCP::FindWindowByName("###RisaMenuLauncher"))
-            ImGuiMCP::BringWindowToDisplayFront(w);
+        if (NowMs() >= g_LanguageComboActiveUntilMs.load()) {
+            if (auto* w = ImGuiMCP::FindWindowByName("###RisaMenuLauncher"))
+                ImGuiMCP::BringWindowToDisplayFront(w);
+        }
         return;
     }
 
+    ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_Tab, ImGuiMCP::ImVec4(0.12f, 0.16f, 0.22f, 1.0f));
+    ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_TabHovered, ImGuiMCP::ImVec4(0.18f, 0.45f, 0.45f, 1.0f));
+    ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_TabActive, ImGuiMCP::ImVec4(0.16f, 0.34f, 0.58f, 1.0f));
+    ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_TabUnfocused, ImGuiMCP::ImVec4(0.10f, 0.13f, 0.18f, 1.0f));
+    ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_TabUnfocusedActive, ImGuiMCP::ImVec4(0.13f, 0.24f, 0.38f, 1.0f));
     if (ImGuiMCP::BeginTabBar("LauncherTabs", 0)) {
-        if (ImGuiMCP::BeginTabItem((FontAwesome::UnicodeToUtf8(0xf0e4) + "  Launcher").c_str(), nullptr, 0)) {
+        if (ImGuiMCP::BeginTabItem((FontAwesome::UnicodeToUtf8(0xf0e4) + "  " + Tr("tab.launcher", "Launcher")).c_str(), nullptr, 0)) {
             const int subView = g_LauncherSubView.load();
             if (subView == 1 && hasCS) {
                 // Community Shaders hub. Full grid-width buttons so the window keeps its size,
@@ -6894,13 +7553,13 @@ static void __stdcall RenderLauncher() {
                 ImGuiMCP::PushStyleColor(21, ImGuiMCP::ImVec4(0.45f, 0.33f, 0.12f, 1.0f));
                 ImGuiMCP::PushStyleColor(22, ImGuiMCP::ImVec4(0.60f, 0.45f, 0.18f, 1.0f));
                 ImGuiMCP::PushStyleColor(23, ImGuiMCP::ImVec4(0.34f, 0.24f, 0.08f, 1.0f));
-                if (ImGuiMCP::Button("<  Back##cssub", subBtn)) g_LauncherSubView.store(0);
+                if (ButtonFit(TrLabel("button.back", "<  Back", "##cssub").c_str(), subBtn, uiScale)) g_LauncherSubView.store(0);
                 ImGuiMCP::PopStyleColor(3);
 
-                if (ImGuiMCP::Button("Main Menu##cssub", subBtn)) OpenCommunityShaders();
-                if (ImGuiMCP::Button("Editor Toggle##cssub", subBtn)) OpenCSEditor();
-                if (ImGuiMCP::Button("Overlay Toggle##cssub", subBtn)) OpenCSOverlay();
-                if (ImGuiMCP::Button("Effect Toggle##cssub", subBtn)) OpenCSEffect();
+                if (ButtonFit(TrLabel("button.main_menu", "Main Menu", "##cssub").c_str(), subBtn, uiScale)) OpenCommunityShaders();
+                if (ButtonFit(TrLabel("button.editor_toggle", "Editor Toggle", "##cssub").c_str(), subBtn, uiScale)) OpenCSEditor();
+                if (ButtonFit(TrLabel("button.overlay_toggle", "Overlay Toggle", "##cssub").c_str(), subBtn, uiScale)) OpenCSOverlay();
+                if (ButtonFit(TrLabel("button.effect_toggle", "Effect Toggle", "##cssub").c_str(), subBtn, uiScale)) OpenCSEffect();
                 ImGuiMCP::PopStyleVar(1);
 
                 // Pad the height so the window stays about the same size as the button grid.
@@ -6916,13 +7575,13 @@ static void __stdcall RenderLauncher() {
                 ImGuiMCP::PushStyleColor(21, ImGuiMCP::ImVec4(0.45f, 0.33f, 0.12f, 1.0f));
                 ImGuiMCP::PushStyleColor(22, ImGuiMCP::ImVec4(0.60f, 0.45f, 0.18f, 1.0f));
                 ImGuiMCP::PushStyleColor(23, ImGuiMCP::ImVec4(0.34f, 0.24f, 0.08f, 1.0f));
-                if (ImGuiMCP::Button("<  Back##partysub", subBtn)) g_LauncherSubView.store(0);
+                if (ButtonFit(TrLabel("button.back", "<  Back", "##partysub").c_str(), subBtn, uiScale)) g_LauncherSubView.store(0);
                 ImGuiMCP::PopStyleColor(3);
 
-                if (ImGuiMCP::Button("Settings##partysub", subBtn)) OpenPartySettings();
-                if (ImGuiMCP::Button("Party Sheet##partysub", subBtn)) OpenPartySheet();
-                if (ImGuiMCP::Button("Inspect Card##partysub", subBtn)) OpenPartyInspect();
-                if (ImGuiMCP::Button("Character Sheet##partysub", subBtn)) OpenPartyCharacter();
+                if (ButtonFit(TrLabel("button.settings", "Settings", "##partysub").c_str(), subBtn, uiScale)) OpenPartySettings();
+                if (ButtonFit(TrLabel("button.party_sheet", "Party Sheet", "##partysub").c_str(), subBtn, uiScale)) OpenPartySheet();
+                if (ButtonFit(TrLabel("button.inspect_card", "Inspect Card", "##partysub").c_str(), subBtn, uiScale)) OpenPartyInspect();
+                if (ButtonFit(TrLabel("button.character_sheet", "Character Sheet", "##partysub").c_str(), subBtn, uiScale)) OpenPartyCharacter();
                 ImGuiMCP::PopStyleVar(1);
 
                 const float rowH = launcherButtonSize.y + 8.0f * layoutScale;
@@ -6953,14 +7612,21 @@ static void __stdcall RenderLauncher() {
 
                     const float left = itemMin.x + 12.0f * layoutScale;
                     const float iconSlotWidth = 24.0f * layoutScale;
+                    const float textLeft = left + iconSlotWidth + 8.0f * layoutScale;
+                    const float textAvailW = itemMax.x - textLeft - 10.0f * layoutScale;
+                    float textFit = 1.0f;
+                    if (textAvailW > 12.0f && nameSize.x > textAvailW) {
+                        textFit = textAvailW / nameSize.x;
+                        if (textFit < 0.72f) textFit = 0.72f;
+                    }
                     const float centerY = (itemMin.y + itemMax.y) * 0.5f;
                     const auto color = ImGuiMCP::GetColorU32(static_cast<ImGuiMCP::ImGuiCol>(0));
                     auto* drawList = ImGuiMCP::GetWindowDrawList();
                     ImGuiMCP::ImDrawListManager::AddText(drawList, iconFont, fontSize,
                         ImGuiMCP::ImVec2(left + (iconSlotWidth - iconSize.x) * 0.5f, centerY - iconSize.y * 0.5f),
                         color, button.icon.c_str());
-                    ImGuiMCP::ImDrawListManager::AddText(drawList, textFont, fontSize,
-                        ImGuiMCP::ImVec2(left + iconSlotWidth + 8.0f * layoutScale, centerY - nameSize.y * 0.5f),
+                    ImGuiMCP::ImDrawListManager::AddText(drawList, textFont, fontSize * textFit,
+                        ImGuiMCP::ImVec2(textLeft, centerY - (nameSize.y * textFit) * 0.5f),
                         color, button.name.c_str());
                 };
 
@@ -6972,13 +7638,15 @@ static void __stdcall RenderLauncher() {
                                      buttons[i].id == "IED" ||
                                      buttons[i].id == "ENB" ||
                                      buttons[i].id == "QAR" ||
+                                     buttons[i].id == "ModFunctionMenu" ||
+                                     buttons[i].id == "OPS" ||
                                      buttons[i].id == "PartySheet") && !IsGameLoaded();
                     // These menus can't be driven while the console is open, so grey them out then.
                     if (consoleOpen && (buttons[i].id == "MCM" || buttons[i].id == "IED" || buttons[i].id == "DebugMenu" ||
                                         buttons[i].id == "ImprovedCamera" || buttons[i].id == "KreatE" ||
                                         buttons[i].id == "PartySheet" || buttons[i].id == "CatMenu" ||
-                                        buttons[i].id == "QAR" ||
-                                        buttons[i].id == "Dragonborn")) {
+                                        buttons[i].id == "QAR" || buttons[i].id == "ModFunctionMenu" ||
+                                        buttons[i].id == "OPS" || buttons[i].id == "Dragonborn")) {
                         disabled = true;
                     }
 
@@ -7121,7 +7789,7 @@ static void __stdcall RenderLauncher() {
             ImGuiMCP::EndTabItem();
         }
 
-        const bool settingsTabOpen = ImGuiMCP::BeginTabItem((FontAwesome::UnicodeToUtf8(0xf013) + "  Settings").c_str(), nullptr, 0);
+        const bool settingsTabOpen = ImGuiMCP::BeginTabItem((FontAwesome::UnicodeToUtf8(0xf013) + "  " + Tr("tab.settings", "Settings")).c_str(), nullptr, 0);
         g_SettingsActive = settingsTabOpen; // drives the per-tab resize/scroll behavior next frame
         if (settingsTabOpen) {
             // Scroll the Settings content inside a child window so the tab bar stays pinned at the top.
@@ -7159,19 +7827,65 @@ static void __stdcall RenderLauncher() {
                 }
             };
 
-            SectionHeader("Menu");
-            ImGuiMCP::Text("UI Scale:");
+            SectionHeader(Tr("settings.section.menu", "Menu"));
+            ImGuiMCP::Text("%s", Tr("settings.language", "Language:"));
+            {
+                const std::vector<LanguageOption> availableLanguages = GetAvailableLanguageOptions();
+                int currentLanguageIndex = 0;
+                const std::string currentLanguageCode = SanitizeLanguageCode(g_Language);
+                for (int i = 0; i < static_cast<int>(availableLanguages.size()); ++i) {
+                    if (currentLanguageCode == availableLanguages[i].code) {
+                        currentLanguageIndex = i;
+                        break;
+                    }
+                }
+
+                ImGuiMCP::PushItemWidth(-1.0f);
+                if (ImGuiMCP::BeginCombo("##LanguageCombo", availableLanguages[currentLanguageIndex].englishName, 0)) {
+                    ImGuiMCP::SetWindowFontScale(uiScale);
+                    g_LanguageComboActiveUntilMs.store(NowMs() + 2500);
+                    for (int i = 0; i < static_cast<int>(availableLanguages.size()); ++i) {
+                        const bool selected = (i == currentLanguageIndex);
+                        std::string itemLabel = std::string(availableLanguages[i].englishName) + "##LanguageComboItem" + std::to_string(i);
+                        if (ImGuiMCP::Selectable(itemLabel.c_str(), selected, 0, ImGuiMCP::ImVec2(0.0f, 0.0f))) {
+                            currentLanguageIndex = i;
+                            g_Language = availableLanguages[currentLanguageIndex].code;
+                            LoadTranslations();
+                            SaveButtonOrder();
+                            g_LanguageComboActiveUntilMs.store(NowMs() + 1000);
+                        }
+                        if (selected) {
+                            ImGuiMCP::SetItemDefaultFocus();
+                        }
+                    }
+                    ImGuiMCP::EndCombo();
+                }
+                if (ImGuiMCP::IsItemClicked()) {
+                    g_LanguageComboActiveUntilMs.store(NowMs() + 2500);
+                }
+                ImGuiMCP::PopItemWidth();
+            }
+            SmallTooltip(Tr("tooltip.language", "Choose the language JSON Risa should load. Changes apply immediately."));
+
+            ImGuiMCP::Text("%s", Tr("settings.ui_scale", "UI Scale:"));
             float scale = g_LauncherFontScale.load();
             if (ImGuiMCP::SliderFloat("##FontScaleSlider", &scale, 0.6f, 1.4f, "%.2f", 0)) {
                 g_LauncherFontScale.store(scale);
                 SaveButtonOrder();
             }
+            ImGuiMCP::Text("%s", Tr("settings.font_scale", "Font Scale:"));
+            float textScale = g_LauncherTextScale.load();
+            if (ImGuiMCP::SliderFloat("##TextScaleSlider", &textScale, 0.6f, 1.4f, "%.2f", 0)) {
+                g_LauncherTextScale.store(textScale);
+                SaveButtonOrder();
+            }
+            SmallTooltip(Tr("tooltip.font_scale", "Scales only menu text. UI Scale still changes both layout and text."));
 
-            ImGuiMCP::Text("Launcher Toggle Hotkey:");
+            ImGuiMCP::Text("%s", Tr("settings.launcher_toggle_hotkey", "Launcher Toggle Hotkey:"));
             const bool waitingForKey = g_WaitingForHotkeyPress.load();
             std::string hotkeyBtnLabel;
             if (waitingForKey) {
-                hotkeyBtnLabel = "[ Press any key... ]##LauncherHotkeyBtn";
+                hotkeyBtnLabel = TrLabel("button.press_any_key", "[ Press any key... ]", "##LauncherHotkeyBtn");
             } else {
                 std::string prefix = "";
                 if (g_LauncherHotkeyCtrl.load()) prefix += "Ctrl + ";
@@ -7179,50 +7893,60 @@ static void __stdcall RenderLauncher() {
                 if (g_LauncherHotkeyAlt.load()) prefix += "Alt + ";
                 hotkeyBtnLabel = prefix + NameFromDIK(g_LauncherHotkeyDIK.load()) + "##LauncherHotkeyBtn";
             }
+            float settingsControlH = ImGuiMCP::GetFrameHeight() * 1.08f;
+            const float minSettingsControlH = 30.0f * layoutScale;
+            if (settingsControlH < minSettingsControlH) settingsControlH = minSettingsControlH;
+            const float launcherAdvButtonW = settingsControlH * 1.55f;
+            const float launcherHotkeyGap = 8.0f * layoutScale;
+            float launcherIconScale = uiScale;
+            if (launcherIconScale < baseUiScale) launcherIconScale = baseUiScale;
+            const ImGuiMCP::ImVec2 launcherHotkeyButtonSize(210.0f * layoutScale, settingsControlH);
             ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_Button,        ImGuiMCP::ImVec4(0.08f, 0.08f, 0.10f, 1.0f));
             ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_ButtonHovered, ImGuiMCP::ImVec4(0.18f, 0.18f, 0.22f, 1.0f));
             ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_ButtonActive,  ImGuiMCP::ImVec4(0.24f, 0.24f, 0.30f, 1.0f));
-            if (ImGuiMCP::Button(hotkeyBtnLabel.c_str(), launcherButtonSize)) {
+            if (ButtonFit(hotkeyBtnLabel.c_str(), launcherHotkeyButtonSize, uiScale)) {
                 if (!g_WaitingForHotkeyPress.load()) {
                     g_KeyCaptureStartedMs.store(NowMs());
                     g_WaitingForHotkeyPress.store(true);
                 }
             }
             ImGuiMCP::PopStyleColor(3);
-            if (!waitingForKey) {
-                ImGuiMCP::SameLine(0.0f, 8.0f * layoutScale);
-                const bool hasLauncherAdvEdit = g_LauncherHotkeyCtrl.load() || g_LauncherHotkeyShift.load() ||
-                                                g_LauncherHotkeyAlt.load() || g_LauncherHotkeyDoubleTap.load() ||
-                                                g_LauncherHotkeyHold.load();
-                if (hasLauncherAdvEdit) {
-                    ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_Button,        ImGuiMCP::ImVec4(0.20f, 0.45f, 0.28f, 1.0f));
-                    ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_ButtonHovered, ImGuiMCP::ImVec4(0.26f, 0.56f, 0.35f, 1.0f));
-                    ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_ButtonActive,  ImGuiMCP::ImVec4(0.16f, 0.38f, 0.24f, 1.0f));
-                }
-                if (ImGuiMCP::Button((FontAwesome::UnicodeToUtf8(0xf11c) + "##launcherAdv").c_str(),
-                        ImGuiMCP::ImVec2(46.0f * layoutScale, 0.0f))) {
-                    ImGuiMCP::OpenPopup("Launcher Hotkey Options");
-                }
-                if (hasLauncherAdvEdit) ImGuiMCP::PopStyleColor(3);
-                ImGuiMCP::SetItemTooltip("Trigger mode (single / double / hold) and hold time");
-                ImGuiMCP::SameLine(0.0f, 8.0f * layoutScale);
-                ImGuiMCP::AlignTextToFramePadding();
-                ImGuiMCP::TextDisabled("(Click to change)");
+            ImGuiMCP::SameLine(0.0f, launcherHotkeyGap);
+            const bool hasLauncherAdvEdit = g_LauncherHotkeyCtrl.load() || g_LauncherHotkeyShift.load() ||
+                                            g_LauncherHotkeyAlt.load() || g_LauncherHotkeyDoubleTap.load() ||
+                                            g_LauncherHotkeyHold.load();
+            if (hasLauncherAdvEdit) {
+                ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_Button,        ImGuiMCP::ImVec4(0.20f, 0.45f, 0.28f, 1.0f));
+                ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_ButtonHovered, ImGuiMCP::ImVec4(0.26f, 0.56f, 0.35f, 1.0f));
+                ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_ButtonActive,  ImGuiMCP::ImVec4(0.16f, 0.38f, 0.24f, 1.0f));
             }
+            ImGuiMCP::PushStyleVar(ImGuiMCP::ImGuiStyleVar_ButtonTextAlign, ImGuiMCP::ImVec2(0.5f, 0.58f));
+            ImGuiMCP::SetWindowFontScale(launcherIconScale);
+            if (IconButtonCentered("##launcherAdv", FontAwesome::UnicodeToUtf8(0xf11c),
+                    ImGuiMCP::ImVec2(launcherAdvButtonW, settingsControlH), 1.5f * layoutScale, 1.0f * layoutScale)) {
+                ImGuiMCP::OpenPopup("Launcher Hotkey Options");
+            }
+            ImGuiMCP::SetWindowFontScale(uiScale);
+            ImGuiMCP::PopStyleVar(1);
+            if (hasLauncherAdvEdit) ImGuiMCP::PopStyleColor(3);
+            ImGuiMCP::SetItemTooltip("%s", Tr("tooltip.trigger_mode", "Trigger mode (single / double / hold) and hold time"));
+            ImGuiMCP::SameLine(0.0f, 8.0f * layoutScale);
+            ImGuiMCP::AlignTextToFramePadding();
+            ImGuiMCP::TextDisabled("%s", Tr("settings.click_to_change", "(Click to change)"));
             // Launcher trigger-mode popup - slides out from the LEFT (right edge pinned to the launcher's left).
             if (auto* lw = ImGuiMCP::FindWindowByName("###RisaMenuLauncher")) {
                 ImGuiMCP::SetNextWindowPos(ImGuiMCP::ImVec2(lw->Pos.x + 1.0f, lw->Pos.y),
                     ImGuiMCP::ImGuiCond_Appearing, ImGuiMCP::ImVec2(1.0f, 0.0f));
             }
             if (ImGuiMCP::BeginPopup("Launcher Hotkey Options")) {
-                ImGuiMCP::TextColored(ImGuiMCP::ImVec4(0.40f, 0.62f, 1.00f, 1.0f), "Launcher Hotkey Options");
+                ImGuiMCP::TextColored(ImGuiMCP::ImVec4(0.40f, 0.62f, 1.00f, 1.0f), "%s", Tr("popup.launcher_hotkey_options.title", "Launcher Hotkey Options"));
                 ImGuiMCP::Separator();
-                ImGuiMCP::Text("Trigger Mode:");
+                ImGuiMCP::Text("%s", Tr("settings.trigger_mode", "Trigger Mode:"));
                 int lmode = g_LauncherHotkeyHold.load() ? 2 : (g_LauncherHotkeyDoubleTap.load() ? 1 : 0);
                 bool lmChanged = false;
-                if (ImGuiMCP::RadioButton("Single Press (default)##lm", lmode == 0)) { lmode = 0; lmChanged = true; }
-                if (ImGuiMCP::RadioButton("Double Press (tap twice)##lm", lmode == 1)) { lmode = 1; lmChanged = true; }
-                if (ImGuiMCP::RadioButton("Hold to Trigger##lm", lmode == 2)) { lmode = 2; lmChanged = true; }
+                if (ImGuiMCP::RadioButton(TrLabel("trigger.single_press_default", "Single Press (default)", "##lm").c_str(), lmode == 0)) { lmode = 0; lmChanged = true; }
+                if (ImGuiMCP::RadioButton(TrLabel("trigger.double_press", "Double Press (tap twice)", "##lm").c_str(), lmode == 1)) { lmode = 1; lmChanged = true; }
+                if (ImGuiMCP::RadioButton(TrLabel("trigger.hold_to_trigger", "Hold to Trigger", "##lm").c_str(), lmode == 2)) { lmode = 2; lmChanged = true; }
                 if (lmChanged) {
                     g_LauncherHotkeyDoubleTap.store(lmode == 1);
                     g_LauncherHotkeyHold.store(lmode == 2);
@@ -7231,7 +7955,7 @@ static void __stdcall RenderLauncher() {
                 if (lmode == 2) {
                     int hms = g_LauncherHoldDurationMs.load();
                     ImGuiMCP::PushItemWidth(-1.0f);
-                    if (ImGuiMCP::SliderInt("##launcherHoldMs", &hms, 100, 2000, "Hold %d ms")) {
+                    if (ImGuiMCP::SliderInt("##launcherHoldMs", &hms, 100, 2000, Tr("slider.hold_ms_format", "Hold %d ms"))) {
                         g_LauncherHoldDurationMs.store(hms);
                         SaveButtonOrder();
                     }
@@ -7275,14 +7999,15 @@ static void __stdcall RenderLauncher() {
             if (ImGuiMCP::Checkbox("Alt", &altVal)) { g_LauncherHotkeyAlt.store(altVal); hotkeyOptChanged = true; }
             // (Double Tap / Hold moved into the keyboard button's popup next to the hotkey.)
 
-            if (ImGuiMCP::Checkbox("Easy Close (single key)", &easyCloseVal)) { g_LauncherHotkeyEasyClose.store(easyCloseVal); hotkeyOptChanged = true; }
-            SmallTooltip("By default, if modifiers, double-tap, or hold are set to open, they are also required to close. Enabling this makes closing always a single press of the key under all settings.");
+            if (ImGuiMCP::Checkbox(Tr("settings.easy_close", "Easy Close (single key)"), &easyCloseVal)) { g_LauncherHotkeyEasyClose.store(easyCloseVal); hotkeyOptChanged = true; }
+            SmallTooltip(Tr("tooltip.easy_close",
+                "By default, if modifiers, double-tap, or hold are set to open, they are also required to close. Enabling this makes closing always a single press of the key under all settings."));
 
             if (hotkeyOptChanged) {
                 SaveButtonOrder();
             }
 
-            SectionHeader("Hotkey Control");
+            SectionHeader(Tr("settings.section.hotkey_control", "Hotkey Control"));
 
             // Each category is a collapsing header with its own table. catTableOpen tracks the
             // table for whichever category is currently being drawn.
@@ -7293,17 +8018,18 @@ static void __stdcall RenderLauncher() {
                 if (open) {
                     const std::string tblId = std::string("HKTbl_") + label;
                     ImGuiMCP::ImVec2 catAvail; ImGuiMCP::GetContentRegionAvail(&catAvail);
-                    catTableOpen = ImGuiMCP::BeginTable(tblId.c_str(), 7, ImGuiMCP::ImGuiTableFlags_SizingStretchProp,
-                        ImGuiMCP::ImVec2(catAvail.x - 12.0f * layoutScale, 0.0f)); // small right margin off the window edge
+                    float tableW = catAvail.x - g_HotkeyLayoutTableRightMargin.load() * layoutScale;
+                    if (tableW < 200.0f * layoutScale) tableW = 200.0f * layoutScale;
+                    catTableOpen = ImGuiMCP::BeginTable(tblId.c_str(), 6, ImGuiMCP::ImGuiTableFlags_SizingStretchProp,
+                        ImGuiMCP::ImVec2(tableW, 0.0f)); // small right margin off the window edge
                     if (catTableOpen) {
-                        // name | spacer | key (centered) | spacer | advanced (⌨) | spacer | toggle (at the right edge)
-                        ImGuiMCP::TableSetupColumn("Mod", ImGuiMCP::ImGuiTableColumnFlags_WidthFixed, 200.0f * layoutScale);
-                        ImGuiMCP::TableSetupColumn("##sp1", ImGuiMCP::ImGuiTableColumnFlags_WidthStretch, 4.0f);
-                        ImGuiMCP::TableSetupColumn("Key", ImGuiMCP::ImGuiTableColumnFlags_WidthFixed, 150.0f * layoutScale);
-                        ImGuiMCP::TableSetupColumn("##sp2", ImGuiMCP::ImGuiTableColumnFlags_WidthStretch, 0.8f);
-                        ImGuiMCP::TableSetupColumn("Adv", ImGuiMCP::ImGuiTableColumnFlags_WidthFixed, 52.0f * layoutScale);
-                        ImGuiMCP::TableSetupColumn("##sp3", ImGuiMCP::ImGuiTableColumnFlags_WidthStretch, 0.1f);
-                        ImGuiMCP::TableSetupColumn("Enabled", ImGuiMCP::ImGuiTableColumnFlags_WidthFixed, 72.0f * layoutScale);
+                        // name | expand arrow | key (centered) | spacer | advanced (keyboard) | toggle
+                        ImGuiMCP::TableSetupColumn(Tr("table.mod", "Mod"), ImGuiMCP::ImGuiTableColumnFlags_WidthFixed, g_HotkeyLayoutNameColumnW.load() * layoutScale);
+                        ImGuiMCP::TableSetupColumn("##expcol", ImGuiMCP::ImGuiTableColumnFlags_WidthFixed, g_HotkeyLayoutExpandColumnW.load() * layoutScale);
+                        ImGuiMCP::TableSetupColumn(Tr("table.key", "Key"), ImGuiMCP::ImGuiTableColumnFlags_WidthFixed, g_HotkeyLayoutKeyColumnW.load() * layoutScale);
+                        ImGuiMCP::TableSetupColumn("##sp2", ImGuiMCP::ImGuiTableColumnFlags_WidthStretch, g_HotkeyLayoutSpacerWeight.load());
+                        ImGuiMCP::TableSetupColumn(Tr("table.advanced_short", "Adv"), ImGuiMCP::ImGuiTableColumnFlags_WidthFixed, g_HotkeyLayoutAdvColumnW.load() * layoutScale);
+                        ImGuiMCP::TableSetupColumn(Tr("table.enabled", "Enabled"), ImGuiMCP::ImGuiTableColumnFlags_WidthFixed, g_HotkeyLayoutToggleColumnW.load() * layoutScale);
                     }
                 }
                 return open;
@@ -7324,10 +8050,10 @@ static void __stdcall RenderLauncher() {
             // ENABLED mod's alias (free choice is allowed — this only warns).
             auto AliasConflict = [&](int idx) -> std::string {
                 if (idx < 0) return "";
-                if (aliasIsLauncher(idx)) return "Clashes with the launcher hotkey.";
+                if (aliasIsLauncher(idx)) return Tr("conflict.launcher_hotkey", "Clashes with the launcher hotkey.");
                 for (int j = 0; j < AI_COUNT; ++j)
                     if (j != idx && g_AliasUnblock[j]->load() && aliasEq(idx, j))
-                        return std::string("Clashes with ") + g_AliasIds[j] + " (enabled).";
+                        return std::string(Tr("conflict.clashes_with", "Clashes with ")) + g_AliasIds[j] + Tr("conflict.enabled_suffix", " (enabled).");
                 return "";
             };
 
@@ -7336,7 +8062,15 @@ static void __stdcall RenderLauncher() {
                     std::atomic<bool>& setting, bool installed, bool originalAvailable,
                     bool* expand, bool isSub, auto simulateAction) {
                 if (installed && catTableOpen) {
-                    ImGuiMCP::TableNextRow(0, 36.0f * layoutScale);
+                    float hotkeyRowH = ImGuiMCP::GetFrameHeight();
+                    const float advRowH = settingsControlH * g_HotkeyLayoutAdvButtonHMult.load();
+                    if (hotkeyRowH < advRowH) hotkeyRowH = advRowH;
+                    float toggleRowH = ImGuiMCP::GetFrameHeight() * g_HotkeyLayoutToggleHeightMult.load();
+                    const float minToggleRowH = g_HotkeyLayoutToggleMinH.load() * layoutScale;
+                    if (toggleRowH < minToggleRowH) toggleRowH = minToggleRowH;
+                    if (hotkeyRowH < toggleRowH) hotkeyRowH = toggleRowH;
+                    hotkeyRowH += 3.0f * layoutScale;
+                    ImGuiMCP::TableNextRow(0, hotkeyRowH);
 
                     // Column 0: mod name button. Sub-rows are indented + darker blue + a bit smaller.
                     ImGuiMCP::TableSetColumnIndex(0);
@@ -7347,7 +8081,7 @@ static void __stdcall RenderLauncher() {
                         ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_ButtonActive,  ImGuiMCP::ImVec4(0.07f, 0.14f, 0.28f, 1.0f));
                     }
                     const std::string nameBtnLabel = std::string(modName) + "##ModBtn_" + id;
-                    if (ImGuiMCP::Button(nameBtnLabel.c_str(), ImGuiMCP::ImVec2(-1.0f, 0.0f))) {
+                    if (ButtonFit(nameBtnLabel.c_str(), ImGuiMCP::ImVec2(-1.0f, 0.0f), uiScale)) {
                         // These Settings buttons toggle the mod to re-sync a menu that got out of
                         // state — keep Risa's launcher OPEN (unlike the main grid buttons, which
                         // dismiss it). The mod's Open*() helper calls CloseLauncher() internally, so
@@ -7391,7 +8125,7 @@ static void __stdcall RenderLauncher() {
                         const bool capturing = g_CapturingAlias.load() == aliasIdx;
                         std::string lbl;
                         if (capturing) {
-                            lbl = std::string("[ press a key... ]##alias") + id;
+                            lbl = TrLabel("button.press_any_key", "[ Press any key... ]", (std::string("##alias") + id).c_str());
                         } else {
                             std::string p;
                             if (g_AliasCtrl[aliasIdx].load()) p += "Ctrl + ";
@@ -7440,8 +8174,7 @@ static void __stdcall RenderLauncher() {
                     // Column 4: Advanced settings button (⌨ icon)
                     ImGuiMCP::TableSetColumnIndex(4);
                     if (aliasIdx >= 0) {
-                        const std::string advId = std::string(FontAwesome::UnicodeToUtf8(0xf11c)) + "##adv_" + id;
-                        ImGuiMCP::SetCursorPosX(ImGuiMCP::GetCursorPosX() + 2.0f * layoutScale);
+                        const std::string advId = std::string("##adv_") + id;
                         // Tint the button when this key has a non-default advanced setting (any modifier,
                         // or a trigger mode other than Single Press) so an edit is visible at a glance.
                         const bool hasAdvEdit = g_AliasCtrl[aliasIdx].load() || g_AliasShift[aliasIdx].load() ||
@@ -7451,37 +8184,59 @@ static void __stdcall RenderLauncher() {
                             ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_ButtonHovered, ImGuiMCP::ImVec4(0.26f, 0.56f, 0.35f, 1.0f));
                             ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_ButtonActive,  ImGuiMCP::ImVec4(0.16f, 0.38f, 0.24f, 1.0f));
                         }
-                        if (ImGuiMCP::Button(advId.c_str(), ImGuiMCP::ImVec2(46.0f * layoutScale, 0.0f))) { // wider so the keyboard glyph isn't clipped
+                        const float advButtonH = settingsControlH * g_HotkeyLayoutAdvButtonHMult.load();
+                        const float advButtonW = settingsControlH * g_HotkeyLayoutAdvButtonWMult.load();
+                        float advIconScale = launcherIconScale;
+                        ImGuiMCP::PushStyleVar(ImGuiMCP::ImGuiStyleVar_ButtonTextAlign, ImGuiMCP::ImVec2(0.5f, 0.58f));
+                        ImGuiMCP::SetWindowFontScale(advIconScale);
+                        if (IconButtonCentered(advId.c_str(), FontAwesome::UnicodeToUtf8(0xf11c),
+                                ImGuiMCP::ImVec2(advButtonW, advButtonH),
+                                g_HotkeyLayoutAdvIconYNudge.load() * layoutScale,
+                                g_HotkeyLayoutAdvIconXNudge.load() * layoutScale)) {
                             g_ActiveHotkeyOptionsAlias = aliasIdx;
                             g_OpenHotkeyOptionsPopup.store(true);
                         }
+                        ImGuiMCP::SetWindowFontScale(uiScale);
+                        ImGuiMCP::PopStyleVar(1);
                         if (hasAdvEdit) ImGuiMCP::PopStyleColor(3);
-                        SmallTooltip(hasAdvEdit ? "Advanced Bindings (edited: modifiers or trigger mode set)"
-                                                : "Advanced Bindings (modifiers, double-press, hold, reset)");
+                        SmallTooltip(hasAdvEdit ? Tr("tooltip.advanced_bindings_edited", "Advanced Bindings (edited: modifiers or trigger mode set)")
+                                                : Tr("tooltip.advanced_bindings", "Advanced Bindings (modifiers, double-press, hold, reset)"));
                     }
 
                     // Column 6 (right edge): the enable toggle — OR, when the key clashes, the
                     // warning marker replaces the toggle entirely.
-                    ImGuiMCP::TableSetColumnIndex(6);
+                    ImGuiMCP::TableSetColumnIndex(5);
                     const std::string conflict = (aliasIdx >= 0) ? AliasConflict(aliasIdx) : std::string();
-                    const float toggleW = ImGuiMCP::GetFrameHeight() * 0.80f * 1.85f;
+                    float toggleH = ImGuiMCP::GetFrameHeight() * g_HotkeyLayoutToggleHeightMult.load();
+                    const float minToggleH = g_HotkeyLayoutToggleMinH.load() * layoutScale;
+                    if (toggleH < minToggleH) toggleH = minToggleH;
+                    const float toggleW = toggleH * g_HotkeyLayoutToggleWidthMult.load();
+                    const float toggleColumnW = ImGuiMCP::GetColumnWidth(-1);
+                    const float toggleRightPad = g_HotkeyLayoutToggleRightPad.load() * layoutScale;
+                    const float toggleSlotX = (toggleColumnW > toggleW + toggleRightPad)
+                        ? (toggleColumnW - toggleW - toggleRightPad)
+                        : 0.0f;
                     if (!conflict.empty()) {
-                        ImGuiMCP::ImVec2 colAvail; ImGuiMCP::GetContentRegionAvail(&colAvail);
-                        if (colAvail.x > toggleW) {
-                            ImGuiMCP::SetCursorPosX(ImGuiMCP::GetCursorPosX() + (colAvail.x - toggleW) + (toggleW - 16.0f) * 0.5f);
+                        const std::string warnIcon = FontAwesome::UnicodeToUtf8(0xf071);
+                        ImGuiMCP::ImVec2 warnSize;
+                        ImGuiMCP::CalcTextSize(&warnSize, warnIcon.c_str(), nullptr, false, -1.0f);
+                        ImGuiMCP::SetCursorPosX(ImGuiMCP::GetCursorPosX() + toggleSlotX + (toggleW - warnSize.x) * 0.5f);
+                        if (toggleH > warnSize.y) {
+                            ImGuiMCP::SetCursorPosY(ImGuiMCP::GetCursorPosY() + (toggleH - warnSize.y) * 0.5f);
                         }
-                        ImGuiMCP::SetCursorPosY(ImGuiMCP::GetCursorPosY() + 4.0f * layoutScale);
                         ImGuiMCP::TextColored(ImGuiMCP::ImVec4(1.0f, 0.70f, 0.20f, 1.0f), "%s",
-                            FontAwesome::UnicodeToUtf8(0xf071).c_str());
+                            warnIcon.c_str());
                         SmallTooltip(conflict);
                     } else {
                         bool val = originalAvailable && setting.load();
                         ImGuiMCP::BeginDisabled(!originalAvailable);
                         const std::string toggleId = "##EnableOriginal_" + std::string(id);
-                        ImGuiMCP::ImVec2 colAvail; ImGuiMCP::GetContentRegionAvail(&colAvail);
-                        if (colAvail.x > toggleW) ImGuiMCP::SetCursorPosX(ImGuiMCP::GetCursorPosX() + (colAvail.x - toggleW));
+                        ImGuiMCP::SetCursorPosX(ImGuiMCP::GetCursorPosX() + toggleSlotX);
 
-                        if (SlideToggle(toggleId.c_str(), &val, originalAvailable) && originalAvailable) {
+                        if (SlideToggle(toggleId.c_str(), &val, originalAvailable, layoutScale,
+                                g_HotkeyLayoutToggleHeightMult.load(),
+                                g_HotkeyLayoutToggleMinH.load(),
+                                g_HotkeyLayoutToggleWidthMult.load()) && originalAvailable) {
                             setting.store(val);
                             SKSE::log::info("Settings: alias {} set to {} ({}, conflict='{}').",
                                 id, val, FormatHotkey(g_AliasDik[aliasIdx].load(), g_AliasCtrl[aliasIdx].load(),
@@ -7502,15 +8257,33 @@ static void __stdcall RenderLauncher() {
             // Show both the supported mod's documented default and the binding Risa actually
             // detected this launch. This makes parked keys such as dMenu's F14 visible at a glance.
             auto MakeTooltip = [](const std::string& defaultHotkey, const std::string& currentHotkey) {
-                return "Default key: " + defaultHotkey + "\nCurrent key: " +
-                    (currentHotkey.empty() ? std::string("Unknown") : currentHotkey);
+                return std::string(Tr("tooltip.default_key", "Default key: ")) + defaultHotkey + "\n" +
+                    Tr("tooltip.current_key", "Current key: ") +
+                    (currentHotkey.empty() ? std::string(Tr("hotkey.unknown", "Unknown")) : currentHotkey);
             };
 
-            const std::string oarTooltip = MakeTooltip("SHIFT + O",
-                FormatHotkey(g_OARConfig.toggleDIK, g_OARConfig.ctrl, g_OARConfig.shift, g_OARConfig.alt));
-            const std::string iedTooltip = MakeTooltip("BACKSPACE", FormatHotkey(g_IEDConfig.toggleDIK));
+            // "Current key" reflects what physically happened to each mod's native key:
+            //   - relocated mods show the unpressable F-key they now sit on (e.g. F18),
+            //   - API-driven mods say their key is off and the launcher opens them through the API,
+            //   - intercepted mods say so.
+            // Excluded mods are left untouched, so show their real key with a note instead.
+            auto keyOrExcluded = [](int aliasIdx, WORD dik, const std::string& managedDesc) -> std::string {
+                if (aliasIdx >= 0 && g_ExcludeMod[aliasIdx].load())
+                    return FormatHotkey(dik) + Tr("hotkey.excluded_left_alone_suffix", " (excluded, left alone)");
+                return managedDesc;
+            };
+            const std::string kViaApi = Tr("hotkey.via_api", "Run through the mod's API (native key off)");
+            auto movedKey = [&](int idx, WORD dik) { return keyOrExcluded(idx, dik, NameFromDIK(dik)); };
+            auto apiKey   = [&](int idx, WORD dik) { return keyOrExcluded(idx, dik, kViaApi); };
+
+            const std::string oarTooltip = MakeTooltip("SHIFT + O", movedKey(AI_OAR, g_OARConfig.toggleDIK));
+            const std::string iedTooltip = MakeTooltip("BACKSPACE", movedKey(AI_IED, g_IEDConfig.toggleDIK));
             const std::string qarTooltip = MakeTooltip("None",
                 FormatHotkey(g_AliasDik[AI_QAR].load(), g_AliasCtrl[AI_QAR].load(), g_AliasShift[AI_QAR].load(), g_AliasAlt[AI_QAR].load()));
+            const std::string mfmTooltip = MakeTooltip("F1", movedKey(AI_ModFunctionMenu, g_ModFunctionMenuConfig.toggleDIK));
+            // OPS: key freed by disabling its MCM Hotkey property (opened via mod event). Excluded = left alone.
+            const std::string opsTooltip = MakeTooltip("Numpad 1",
+                "Numpad 1 (kept - opens from the launcher too; its key doesn't clash)");
 
             std::string enbHotkey;
             if (g_ENBConfig.combinationVK != 0) {
@@ -7519,22 +8292,26 @@ static void __stdcall RenderLauncher() {
             enbHotkey += FormatHotkey(DIKFromVK(static_cast<WORD>(g_ENBConfig.editorVK)));
             const std::string enbTooltip = MakeTooltip("SHIFT + ENTER", enbHotkey);
 
-            const std::string debugMenuTooltip = MakeTooltip("F1", FormatHotkey(g_DebugMenuConfig.toggleDIK));
+            const std::string debugMenuTooltip = MakeTooltip("F1", movedKey(AI_DebugMenu, g_DebugMenuConfig.toggleDIK));
             const std::string dMenuTooltip = MakeTooltip("HOME",
-                FormatModifiedHotkey(g_DMenuConfig.toggleDIK, g_DMenuConfig.modifierDIK));
+                HasDMenuV2Api() ? apiKey(AI_DMenu, g_DMenuConfig.toggleDIK)
+                                : keyOrExcluded(AI_DMenu, g_DMenuConfig.toggleDIK,
+                                    FormatModifiedHotkey(g_DMenuConfig.toggleDIK, g_DMenuConfig.modifierDIK)));
             const std::string icTooltip = MakeTooltip("SHIFT + HOME",
                 FormatModifiedHotkey(g_ImprovedCameraConfig.toggleDIK, g_ImprovedCameraConfig.modifierDIK));
-            const std::string flickTooltip = MakeTooltip("F7", FormatHotkey(g_FLICKConfig.toggleDIK));
-            const std::string kreateTooltip = MakeTooltip("END", FormatHotkey(g_KreatEConfig.toggleDIK));
-            const std::string csTooltip = MakeTooltip("END", FormatHotkey(g_CSConfig.toggleDIK));
-            const std::string catMenuTooltip = MakeTooltip("F6", FormatHotkey(g_CatMenuConfig.toggleDIK));
-            const std::string dragonbornTooltip = MakeTooltip("F1", FormatHotkey(g_DragonbornConfig.toggleDIK));
-            const std::string reshadeTooltip = MakeTooltip("HOME", FormatHotkey(g_ReShadeConfig.toggleDIK));
-            const std::string mfTooltip = MakeTooltip("F1", FormatHotkey(g_MFConfig.toggleDIK));
-            const std::string csEditorTip = MakeTooltip("SHIFT + END",
-                FormatModifiedHotkey(g_CSConfig.editorDIK, g_CSConfig.editorModifierDIK));
-            const std::string csOverlayTip = MakeTooltip("F10", FormatHotkey(g_CSConfig.overlayDIK));
-            const std::string csEffectTip = MakeTooltip("NUMPAD *", FormatHotkey(g_CSConfig.effectDIK));
+            const std::string flickTooltip = MakeTooltip("F7", apiKey(AI_FLICK, g_FLICKConfig.toggleDIK));
+            const std::string kreateTooltip = MakeTooltip("END", movedKey(AI_KreatE, g_KreatEConfig.toggleDIK));
+            const std::string csTooltip = MakeTooltip("END", movedKey(AI_CS, g_CSConfig.toggleDIK));
+            const std::string catMenuTooltip = MakeTooltip("F6",
+                keyOrExcluded(AI_CatMenu, g_CatMenuConfig.toggleDIK, Tr("hotkey.opened_directly_intercepted", "Opened directly (native key intercepted)")));
+            const std::string dragonbornTooltip = MakeTooltip("F1", apiKey(AI_Dragonborn, g_DragonbornConfig.toggleDIK));
+            const std::string reshadeTooltip = MakeTooltip("HOME",
+                g_ReShadeAddonActive.load() ? apiKey(AI_ReShade, g_ReShadeConfig.toggleDIK)
+                                            : keyOrExcluded(AI_ReShade, g_ReShadeConfig.toggleDIK, FormatHotkey(g_ReShadeConfig.toggleDIK)));
+            const std::string mfTooltip = MakeTooltip("F1", apiKey(AI_MF, g_MFConfig.toggleDIK));
+            const std::string csEditorTip = MakeTooltip("SHIFT + END", movedKey(AI_CSEditor, g_CSConfig.editorDIK));
+            const std::string csOverlayTip = MakeTooltip("F10", movedKey(AI_CSOverlay, g_CSConfig.overlayDIK));
+            const std::string csEffectTip = MakeTooltip("NUMPAD *", movedKey(AI_CSEffect, g_CSConfig.effectDIK));
             const std::string partySettingsTip = MakeTooltip("X", FormatHotkey(g_PartySheetConfig.settingsDIK));
             const std::string partySheetTip = MakeTooltip("F6", FormatHotkey(g_PartySheetConfig.partyDIK));
             const std::string partyInspectTip = MakeTooltip("Y", FormatHotkey(g_PartySheetConfig.inspectDIK));
@@ -7551,7 +8328,8 @@ static void __stdcall RenderLauncher() {
                        g_AliasAlt[idx].load() == g_LauncherHotkeyAlt.load();
             };
             const std::string launcherClashReason =
-                "Can't enable: this key is the launcher hotkey.\nClick the key to rebind it to something else.";
+                Tr("tooltip.launcher_clash_reason",
+                    "Can't enable: this key is the launcher hotkey.\nClick the key to rebind it to something else.");
 
             const bool debugOriginalAvailable = !aliasEqualsLauncher(AI_DebugMenu);
             const std::string& debugOriginalTooltip = debugMenuTooltip;
@@ -7561,17 +8339,17 @@ static void __stdcall RenderLauncher() {
             const std::string& dragonbornOriginalTooltip = dragonbornTooltip;
             const std::string& dragonbornDisabledReason = launcherClashReason;
 
-            const bool anyMenusTools = hasMF || hasDMenu || hasFLICK || hasCatMenu || hasDragonborn || hasDebugMenu || hasSearchUI || hasMCM;
-            const bool anyAnimGear   = hasOAR || hasIED || hasPartySheet || hasQAR;
+            const bool anyMenusTools = hasMF || hasDMenu || hasFLICK || hasCatMenu || hasDragonborn || hasDebugMenu || hasSearchUI || hasMCM || hasModFunctionMenu;
+            const bool anyAnimGear   = hasOAR || hasIED || hasPartySheet || hasQAR || hasOPS;
             const bool anyGraphics   = hasENB || hasCS || hasImprovedCamera || hasReShade || hasKreatE;
 
-            if (anyMenusTools && BeginCategory("Menus & Tools")) {
+            if (anyMenusTools && BeginCategory(Tr("settings.category.menus_tools", "Menus & Tools"))) {
                 const std::string mcmTip =
-                    "Sets a hotkey to open the MCM directly. Turn ON to use it, or OFF to free the key for normal gameplay (you can still open MCM using the launcher button).";
+                    Tr("tooltip.mcm_hotkey", "Sets a hotkey to open the MCM directly. Turn ON to use it, or OFF to free the key for normal gameplay (you can still open MCM using the launcher button).");
                 DrawOriginalHotkeyRow("MCM", "MCM", "None", mcmTip, "", AI_MCM, g_UnblockMCM, hasMCM, true, nullptr, false, []() {
                     OpenMCM();
                 });
-                DrawOriginalHotkeyRow("MF", "SKSE Menu Framework", "F1", mfTooltip, "", AI_MF, g_UnblockMF, hasMF, true, nullptr, false, []() {
+                DrawOriginalHotkeyRow("MF", Tr("mod.skse_menu_framework", "SKSE Menu Framework"), "F1", mfTooltip, "", AI_MF, g_UnblockMF, hasMF, true, nullptr, false, []() {
                     OpenSKSEMenuFramework();
                 });
                 DrawOriginalHotkeyRow("dMenu", "dMenu", "Home", dMenuTooltip, "", AI_DMenu, g_UnblockDMenu, hasDMenu, true, nullptr, false, []() {
@@ -7583,46 +8361,55 @@ static void __stdcall RenderLauncher() {
                 DrawOriginalHotkeyRow("CatMenu", "CatMenu", "F6", catMenuTooltip, "", AI_CatMenu, g_UnblockCatMenu, hasCatMenu, true, nullptr, false, []() {
                     OpenCatMenu();
                 });
-                DrawOriginalHotkeyRow("Dragonborn", "Dragonborn's Toolkit", "F1", dragonbornOriginalTooltip, dragonbornDisabledReason,
+                DrawOriginalHotkeyRow("Dragonborn", Tr("mod.dragonborn_toolkit", "Dragonborn's Toolkit"), "F1", dragonbornOriginalTooltip, dragonbornDisabledReason,
                     AI_Dragonborn, g_UnblockDragonborn, hasDragonborn, dragonbornOriginalAvailable, nullptr, false, []() {
                     OpenDragonbornToolkit();
                 });
-                DrawOriginalHotkeyRow("DebugMenu", "Debug Menu", "F1", debugOriginalTooltip, debugDisabledReason,
+                DrawOriginalHotkeyRow("DebugMenu", Tr("mod.debug_menu", "Debug Menu"), "F1", debugOriginalTooltip, debugDisabledReason,
                     AI_DebugMenu, g_UnblockDebugMenu, hasDebugMenu, debugOriginalAvailable, nullptr, false, []() {
                     OpenDebugMenu();
                 });
-                const std::string searchUITip =
-                    "Sets a hotkey to open SearchUI. Turn ON to use it, or OFF to open it only from this launcher (freeing the key for normal gameplay).";
+                // ON = the user's key opens SearchUI; OFF = key parked on the unpressable F18 (freed).
+                const WORD searchDik = static_cast<WORD>(g_SearchUIEffectiveDIK.load());
+                const std::string searchUITip = MakeTooltip("F4",
+                    keyOrExcluded(AI_SearchUI, searchDik,
+                        g_UnblockSearchUI.load() ? FormatHotkey(searchDik) : NameFromDIK(searchDik)));
                 DrawOriginalHotkeyRow("SearchUI", "SearchUI", "F4", searchUITip, "", AI_SearchUI, g_UnblockSearchUI, hasSearchUI, true, nullptr, false, []() {
                     OpenSearchUI();
+                });
+                DrawOriginalHotkeyRow("ModFunctionMenu", Tr("mod.mod_function_menu", "Mod Function Menu"), "F1", mfmTooltip, "", AI_ModFunctionMenu, g_UnblockModFunctionMenu, hasModFunctionMenu, true, nullptr, false, []() {
+                    OpenModFunctionMenu("alias");
                 });
             }
             EndCategory();
 
-            if (anyAnimGear && BeginCategory("Animation & Gear")) {
-                DrawOriginalHotkeyRow("OAR", "Open Animation Replacer", "Shift + O", oarTooltip, "", AI_OAR, g_UnblockOAR, hasOAR, true, nullptr, false, []() {
+            if (anyAnimGear && BeginCategory(Tr("settings.category.animation_gear", "Animation & Gear"))) {
+                DrawOriginalHotkeyRow("OAR", Tr("mod.open_animation_replacer", "Open Animation Replacer"), "Shift + O", oarTooltip, "", AI_OAR, g_UnblockOAR, hasOAR, true, nullptr, false, []() {
                     OpenAnimationReplacer();
                 });
                 DrawOriginalHotkeyRow("IED", "IED", "Backspace", iedTooltip, "", AI_IED, g_UnblockIED, hasIED, true, nullptr, false, []() {
                     OpenImmersiveEquipmentDisplays();
                 });
-                DrawOriginalHotkeyRow("QAR", "Quick Armor Rebalance", "None", qarTooltip, "", AI_QAR, g_UnblockQAR, hasQAR, true, nullptr, false, []() {
+                DrawOriginalHotkeyRow("QAR", Tr("mod.quick_armor_rebalance", "Quick Armor Rebalance"), "None", qarTooltip, "", AI_QAR, g_UnblockQAR, hasQAR, true, nullptr, false, []() {
                     OpenQAR();
                 });
-                DrawOriginalHotkeyRow("PartySettings", "Skyrim Party Sheet", "X", partySettingsTip, "",
+                DrawOriginalHotkeyRow("OPS", Tr("mod.outfit_preview_selector", "Outfit Preview Selector"), "Numpad 1", opsTooltip, "", AI_OPS, g_UnblockOPS, hasOPS, true, nullptr, false, []() {
+                    OpenOPS();
+                });
+                DrawOriginalHotkeyRow("PartySettings", Tr("mod.skyrim_party_sheet", "Skyrim Party Sheet"), "X", partySettingsTip, "",
                     AI_PartySettings, g_UnblockPartySettings, hasPartySheet, true, &s_partySheetExpanded, false, []() {
                     OpenPartySettings();
                 });
                 if (s_partySheetExpanded) {
-                    DrawOriginalHotkeyRow("PartySheetAction", "Party Sheet", "F6", partySheetTip, "",
+                    DrawOriginalHotkeyRow("PartySheetAction", Tr("button.party_sheet", "Party Sheet"), "F6", partySheetTip, "",
                         AI_PartySheet, g_UnblockPartySheet, hasPartySheet, true, nullptr, true, []() {
                         OpenPartySheet();
                     });
-                    DrawOriginalHotkeyRow("PartyInspect", "Inspect Card", "Y", partyInspectTip, "",
+                    DrawOriginalHotkeyRow("PartyInspect", Tr("button.inspect_card", "Inspect Card"), "Y", partyInspectTip, "",
                         AI_PartyInspect, g_UnblockPartyInspect, hasPartySheet, true, nullptr, true, []() {
                         OpenPartyInspect();
                     });
-                    DrawOriginalHotkeyRow("PartyCharacter", "Character Sheet", "U", partyCharacterTip, "",
+                    DrawOriginalHotkeyRow("PartyCharacter", Tr("button.character_sheet", "Character Sheet"), "U", partyCharacterTip, "",
                         AI_PartyCharacter, g_UnblockPartyCharacter, hasPartySheet, true, nullptr, true, []() {
                         OpenPartyCharacter();
                     });
@@ -7630,25 +8417,25 @@ static void __stdcall RenderLauncher() {
             }
             EndCategory();
 
-            if (anyGraphics && BeginCategory("Visual and Lighting")) {
-                DrawOriginalHotkeyRow("ENB", "ENB Editor", "Shift + Enter", enbTooltip, "", AI_ENB, g_UnblockENB, hasENB, true, nullptr, false, []() {
+            if (anyGraphics && BeginCategory(Tr("settings.category.visual_lighting", "Visual and Lighting"))) {
+                DrawOriginalHotkeyRow("ENB", Tr("mod.enb_editor", "ENB Editor"), "Shift + Enter", enbTooltip, "", AI_ENB, g_UnblockENB, hasENB, true, nullptr, false, []() {
                     OpenENB();
                 });
-                DrawOriginalHotkeyRow("CS", "Community Shaders", "End", csTooltip, "", AI_CS, g_UnblockCS, hasCS, true, &s_csExpanded, false, []() {
+                DrawOriginalHotkeyRow("CS", Tr("mod.community_shaders", "Community Shaders"), "End", csTooltip, "", AI_CS, g_UnblockCS, hasCS, true, &s_csExpanded, false, []() {
                     OpenCommunityShaders();
                 });
                 if (s_csExpanded) {
-                    DrawOriginalHotkeyRow("CSEditor", "Editor", "Shift + End", csEditorTip, "", AI_CSEditor, g_UnblockCSEditor, hasCS, true, nullptr, true, []() {
+                    DrawOriginalHotkeyRow("CSEditor", Tr("button.editor_toggle", "Editor"), "Shift + End", csEditorTip, "", AI_CSEditor, g_UnblockCSEditor, hasCS, true, nullptr, true, []() {
                         OpenCSEditor();
                     });
-                    DrawOriginalHotkeyRow("CSOverlay", "Overlay", "F10", csOverlayTip, "", AI_CSOverlay, g_UnblockCSOverlay, hasCS, true, nullptr, true, []() {
+                    DrawOriginalHotkeyRow("CSOverlay", Tr("button.overlay_toggle", "Overlay"), "F10", csOverlayTip, "", AI_CSOverlay, g_UnblockCSOverlay, hasCS, true, nullptr, true, []() {
                         OpenCSOverlay();
                     });
-                    DrawOriginalHotkeyRow("CSEffect", "Effect", "Numpad *", csEffectTip, "", AI_CSEffect, g_UnblockCSEffect, hasCS, true, nullptr, true, []() {
+                    DrawOriginalHotkeyRow("CSEffect", Tr("button.effect_toggle", "Effect"), "Numpad *", csEffectTip, "", AI_CSEffect, g_UnblockCSEffect, hasCS, true, nullptr, true, []() {
                         OpenCSEffect();
                     });
                 }
-                DrawOriginalHotkeyRow("ImprovedCamera", "Improved Camera", "Shift + Home", icTooltip, "",
+                DrawOriginalHotkeyRow("ImprovedCamera", Tr("mod.improved_camera", "Improved Camera"), "Shift + Home", icTooltip, "",
                     AI_IC, g_UnblockImprovedCamera, hasImprovedCamera, true, nullptr, false, []() {
                     OpenImprovedCamera();
                 });
@@ -7661,60 +8448,60 @@ static void __stdcall RenderLauncher() {
             }
             EndCategory();
 
-            SectionHeader("Mod Options");
+            SectionHeader(Tr("settings.section.mod_options", "Mod Options"));
             {
                 bool remember = g_RememberSubView.load();
-                if (ImGuiMCP::Checkbox("Remember the open mod sub-menu", &remember)) {
+                if (ImGuiMCP::Checkbox(Tr("settings.remember_sub_menu", "Remember the open mod sub-menu"), &remember)) {
                     g_RememberSubView.store(remember);
                     SaveButtonOrder();
                 }
-                ImGuiMCP::SetItemTooltip("When on, a mod's sub-menu (e.g. Community Shaders) stays open after you\nclose and reopen the launcher, until you press Back.");
+                ImGuiMCP::SetItemTooltip("%s", Tr("tooltip.remember_sub_menu", "When on, a mod's sub-menu (e.g. Community Shaders) stays open after you\nclose and reopen the launcher, until you press Back."));
 
                 bool consoleVal = g_AllowOpenInConsole.load();
-                if (ImGuiMCP::Checkbox("Can open menu while console is open", &consoleVal)) {
+                if (ImGuiMCP::Checkbox(Tr("settings.open_in_console", "Can open menu while console is open"), &consoleVal)) {
                     g_AllowOpenInConsole.store(consoleVal);
                     SaveButtonOrder();
                 }
-                ImGuiMCP::SetItemTooltip("Open the launcher while the console is up. Use the mouse to navigate.");
+                ImGuiMCP::SetItemTooltip("%s", Tr("tooltip.open_in_console", "Open the launcher while the console is up. Use the mouse to navigate."));
 
                 bool keepRunningVal = g_KeepGameRunning.load();
-                if (ImGuiMCP::Checkbox("Keep the game running while menu is open", &keepRunningVal)) {
+                if (ImGuiMCP::Checkbox(Tr("settings.keep_game_running", "Keep the game running while menu is open"), &keepRunningVal)) {
                     g_KeepGameRunning.store(keepRunningVal);
                     SaveButtonOrder();
                 }
-                ImGuiMCP::SetItemTooltip("Keep the world moving (animations, fire) instead of pausing.");
+                ImGuiMCP::SetItemTooltip("%s", Tr("tooltip.keep_game_running", "Keep the world moving (animations, fire) instead of pausing."));
 
                 bool showExclusions = g_ShowExclusionsTab.load();
-                if (ImGuiMCP::Checkbox("Show Exclusions Tab", &showExclusions)) {
+                if (ImGuiMCP::Checkbox(Tr("settings.show_exclusions_tab", "Show Exclusions Tab"), &showExclusions)) {
                     g_ShowExclusionsTab.store(showExclusions);
                     SaveButtonOrder();
                 }
-                ImGuiMCP::SetItemTooltip("Displays a dedicated 'Exclusions' tab where you can opt-out specific mods from being managed by this menu.");
+                ImGuiMCP::SetItemTooltip("%s", Tr("tooltip.show_exclusions_tab", "Displays a dedicated 'Exclusions' tab where you can opt-out specific mods from being managed by this menu."));
 
                 bool hideExcluded = g_HideExcludedInLauncher.load();
-                if (ImGuiMCP::Checkbox("Excluded mods don't appear in launcher menu", &hideExcluded)) {
+                if (ImGuiMCP::Checkbox(Tr("settings.hide_excluded_launcher", "Excluded mods don't appear in launcher menu"), &hideExcluded)) {
                     g_HideExcludedInLauncher.store(hideExcluded);
                     SaveButtonOrder();
                 }
-                ImGuiMCP::SetItemTooltip("When enabled, mods marked as 'Excluded' will be hidden from the launcher's main button grid.");
+                ImGuiMCP::SetItemTooltip("%s", Tr("tooltip.hide_excluded_launcher", "When enabled, mods marked as 'Excluded' will be hidden from the launcher's main button grid."));
             }
 
-            SectionHeader("Maintenance");
+            SectionHeader(Tr("settings.section.maintenance", "Maintenance"));
             {
                 bool logVal = g_LoggingEnabled.load();
-                if (ImGuiMCP::Checkbox("Enable logging", &logVal)) {
+                if (ImGuiMCP::Checkbox(Tr("settings.enable_logging", "Enable logging"), &logVal)) {
                     g_LoggingEnabled.store(logVal);
                     ApplyLogLevel();
                     SaveButtonOrder();
                 }
-                ImGuiMCP::SetItemTooltip("The full troubleshooting log.\nDocuments\\My Games\\Skyrim Special Edition\\SKSE\\RisaAllInOneMenu.log");
+                ImGuiMCP::SetItemTooltip("%s", Tr("tooltip.enable_logging", "The full troubleshooting log.\nDocuments\\My Games\\Skyrim Special Edition\\SKSE\\RisaAllInOneMenu.log"));
                 ImGuiMCP::SameLine(0.0f, 16.0f * layoutScale);
                 bool fileLogVal = g_FileChangeLogEnabled.load();
-                if (ImGuiMCP::Checkbox("Log file changes", &fileLogVal)) {
+                if (ImGuiMCP::Checkbox(Tr("settings.log_file_changes", "Log file changes"), &fileLogVal)) {
                     g_FileChangeLogEnabled.store(fileLogVal);
                     SaveButtonOrder();
                 }
-                ImGuiMCP::SetItemTooltip("A separate, plain-English audit of exactly which config files this mod\nedits (EDIT) or reverts (REVERT) - nothing else.\nDocuments\\My Games\\Skyrim Special Edition\\SKSE\\RisaAllInOneMenu_FileChanges.log");
+                ImGuiMCP::SetItemTooltip("%s", Tr("tooltip.log_file_changes", "A separate audit of exactly which config files this mod\nedits (EDIT) or reverts (REVERT) - nothing else.\nDocuments\\My Games\\Skyrim Special Edition\\SKSE\\RisaAllInOneMenu_FileChanges.log"));
 
                 static bool s_confirmRestore = false;
                 static bool s_restoreDone = false;
@@ -7724,29 +8511,29 @@ static void __stdcall RenderLauncher() {
                 static bool s_exitDismissed = false;
                 if (s_restoreDone) {
                     ImGuiMCP::TextColored(ImGuiMCP::ImVec4(0.40f, 1.00f, 0.55f, 1.0f),
-                        s_forceModDefaults ? "All supported mod settings restored to their defaults."
-                                           : "All mod settings restored to their captured originals.");
-                    ImGuiMCP::Text("The completed originals backup was removed so a future install starts fresh.");
-                    ImGuiMCP::Text("Quit Skyrim, then disable this mod before the next launch.");
+                        s_forceModDefaults ? Tr("restore.defaults_done", "All supported mod settings restored to their defaults.")
+                                           : Tr("restore.originals_done", "All mod settings restored to their captured originals."));
+                    ImGuiMCP::Text("%s", Tr("restore.backup_removed", "The completed originals backup was removed so a future install starts fresh."));
+                    ImGuiMCP::Text("%s", Tr("restore.quit_then_disable", "Quit Skyrim, then disable this mod before the next launch."));
                     if (!s_exitDismissed) {
                         ImGuiMCP::Spacing();
                         ImGuiMCP::TextColored(ImGuiMCP::ImVec4(1.00f, 0.65f, 0.30f, 1.0f),
-                            "Do you want to exit the game now?");
-                        if (ImGuiMCP::Button("Yes, quit to desktop now", ImGuiMCP::ImVec2(0.0f, 0.0f))) {
+                            "%s", Tr("restore.exit_prompt", "Do you want to exit the game now?"));
+                        if (ButtonFit(Tr("restore.yes_quit_now", "Yes, quit to desktop now"), ImGuiMCP::ImVec2(0.0f, 0.0f), uiScale)) {
                             SKSE::log::info("Restore UI: user chose to exit now; posting a deferred window-close request.");
                             RequestGameExit();
                         }
                         ImGuiMCP::SameLine(0.0f, 8.0f * layoutScale);
-                        if (ImGuiMCP::Button("No, I'll exit later", ImGuiMCP::ImVec2(0.0f, 0.0f))) {
+                        if (ButtonFit(Tr("restore.no_exit_later", "No, I'll exit later"), ImGuiMCP::ImVec2(0.0f, 0.0f), uiScale)) {
                             s_exitDismissed = true;
                         }
                     }
                 } else if (s_confirmRestore) {
                     ImGuiMCP::TextColored(ImGuiMCP::ImVec4(1.00f, 0.65f, 0.30f, 1.0f),
-                        s_forceModDefaults
-                            ? "Apply the supported mods' upstream defaults and ignore captured custom values?"
-                            : "Restore the settings captured before Risa changed them?");
-                    if (ImGuiMCP::Button("Yes, restore for uninstall", ImGuiMCP::ImVec2(0.0f, 0.0f))) {
+                        "%s", s_forceModDefaults
+                            ? Tr("restore.confirm_defaults", "Apply the supported mods' upstream defaults and ignore captured custom values?")
+                            : Tr("restore.confirm_originals", "Restore the settings captured before Risa changed them?"));
+                    if (ButtonFit(Tr("restore.yes_restore_uninstall", "Yes, restore for uninstall"), ImGuiMCP::ImVec2(0.0f, 0.0f), uiScale)) {
                         const bool restored = RestoreAllModDefaults(s_forceModDefaults);
                         s_confirmRestore = false;
                         s_restoreDone = restored;
@@ -7754,28 +8541,28 @@ static void __stdcall RenderLauncher() {
                         s_scrollToBottomFrames = 3;
                     }
                     ImGuiMCP::SameLine(0.0f, 8.0f * layoutScale);
-                    if (ImGuiMCP::Button("Cancel", ImGuiMCP::ImVec2(0.0f, 0.0f))) {
+                    if (ButtonFit(Tr("button.cancel", "Cancel"), ImGuiMCP::ImVec2(0.0f, 0.0f), uiScale)) {
                         s_confirmRestore = false;
                     }
                     // Confirm buttons just appeared below the fold — scroll them into view.
                 } else {
                     if (s_restoreFailed) {
                         ImGuiMCP::TextColored(ImGuiMCP::ImVec4(1.00f, 0.35f, 0.35f, 1.0f),
-                            "Restore was incomplete. The originals backup was kept; check the logs and retry.");
+                            "%s", Tr("restore.incomplete", "Restore was incomplete. The originals backup was kept; check the logs and retry."));
                     }
-                    if (ImGuiMCP::Button("Restore My Original Settings", launcherButtonSize)) {
+                    if (ButtonFit(Tr("restore.my_original_settings", "Restore My Original Settings"), launcherButtonSize, uiScale)) {
                         s_forceModDefaults = false;
                         s_confirmRestore = true;
                         s_scrollToBottomFrames = 3;
                     }
-                    ImGuiMCP::SetItemTooltip("Restore the values captured before Risa changed them.\nMissing captured values use safe supported-mod defaults.");
+                    ImGuiMCP::SetItemTooltip("%s", Tr("tooltip.restore_originals", "Restore the values captured before Risa changed them.\nMissing captured values use safe supported-mod defaults."));
                     ImGuiMCP::SameLine(0.0f, 8.0f * layoutScale);
-                    if (ImGuiMCP::Button("Restore Supported Mod Defaults", launcherButtonSize)) {
+                    if (ButtonFit(Tr("restore.supported_mod_defaults", "Restore Supported Mod Defaults"), launcherButtonSize, uiScale)) {
                         s_forceModDefaults = true;
                         s_confirmRestore = true;
                         s_scrollToBottomFrames = 3;
                     }
-                    ImGuiMCP::SetItemTooltip("Ignore captured custom values and restore every managed setting\nto the supported mod's upstream default.");
+                    ImGuiMCP::SetItemTooltip("%s", Tr("tooltip.restore_defaults", "Ignore captured custom values and restore every managed setting\nto the supported mod's upstream default."));
                 }
 
                 // Keep pushing to the true bottom while ImGui recalculates the changed child height.
@@ -7800,13 +8587,14 @@ static void __stdcall RenderLauncher() {
             if (ImGuiMCP::BeginPopup("Hotkey Options")) {
                 int idx = g_ActiveHotkeyOptionsAlias;
                 if (idx >= 0 && idx < AI_COUNT) {
-                    ImGuiMCP::TextColored(ImGuiMCP::ImVec4(0.40f, 0.62f, 1.00f, 1.0f), "Advanced Bindings: %s", GetModDisplayName(idx));
+                    ImGuiMCP::TextColored(ImGuiMCP::ImVec4(0.40f, 0.62f, 1.00f, 1.0f), "%s %s",
+                        Tr("advanced.title_prefix", "Advanced Bindings:"), GetModDisplayName(idx));
                     ImGuiMCP::Separator();
-                    ImGuiMCP::Text("Key Bind:");
+                    ImGuiMCP::Text("%s", Tr("advanced.key_bind", "Key Bind:"));
                     const bool capturing = g_CapturingAlias.load() == idx;
                     std::string lbl;
                     if (capturing) {
-                        lbl = "[ press a key... ]##popup_alias";
+                        lbl = TrLabel("button.press_any_key", "[ Press any key... ]", "##popup_alias");
                     } else {
                         std::string p;
                         if (g_AliasCtrl[idx].load()) p += "Ctrl + ";
@@ -7852,7 +8640,7 @@ static void __stdcall RenderLauncher() {
                     }
 
                     ImGuiMCP::Separator();
-                    ImGuiMCP::Text("Modifiers:");
+                    ImGuiMCP::Text("%s", Tr("advanced.modifiers", "Modifiers:"));
                     bool ctrl = g_AliasCtrl[idx].load();
                     bool shift = g_AliasShift[idx].load();
                     bool alt = g_AliasAlt[idx].load();
@@ -7867,12 +8655,12 @@ static void __stdcall RenderLauncher() {
                     }
 
                     ImGuiMCP::Separator();
-                    ImGuiMCP::Text("Trigger Mode:");
+                    ImGuiMCP::Text("%s", Tr("settings.trigger_mode", "Trigger Mode:"));
                     int mode = g_AliasTriggerMode[idx].load();
                     bool modeChanged = false;
-                    if (ImGuiMCP::RadioButton("Single Press (default)", mode == 0)) { mode = 0; modeChanged = true; }
-                    if (ImGuiMCP::RadioButton("Double Press (tap twice)", mode == 1)) { mode = 1; modeChanged = true; }
-                    if (ImGuiMCP::RadioButton("Hold to Trigger", mode == 2)) { mode = 2; modeChanged = true; }
+                    if (ImGuiMCP::RadioButton(TrLabel("trigger.single_press_default", "Single Press (default)", "##alias_popup").c_str(), mode == 0)) { mode = 0; modeChanged = true; }
+                    if (ImGuiMCP::RadioButton(TrLabel("trigger.double_press", "Double Press (tap twice)", "##alias_popup").c_str(), mode == 1)) { mode = 1; modeChanged = true; }
+                    if (ImGuiMCP::RadioButton(TrLabel("trigger.hold_to_trigger", "Hold to Trigger", "##alias_popup").c_str(), mode == 2)) { mode = 2; modeChanged = true; }
                     if (modeChanged) {
                         g_AliasTriggerMode[idx].store(mode);
                         SaveButtonOrder();
@@ -7880,7 +8668,7 @@ static void __stdcall RenderLauncher() {
                     if (mode == 2) {
                         int holdMs = g_AliasHoldDurationMs[idx].load();
                         ImGuiMCP::PushItemWidth(-1.0f);
-                        if (ImGuiMCP::SliderInt("##aliasHoldMs", &holdMs, 100, 2000, "Hold %d ms")) {
+                        if (ImGuiMCP::SliderInt("##aliasHoldMs", &holdMs, 100, 2000, Tr("slider.hold_ms_format", "Hold %d ms"))) {
                             g_AliasHoldDurationMs[idx].store(holdMs);
                             SaveButtonOrder();
                         }
@@ -7892,7 +8680,7 @@ static void __stdcall RenderLauncher() {
                     ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_Button,        ImGuiMCP::ImVec4(0.70f, 0.40f, 0.15f, 1.0f));
                     ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_ButtonHovered, ImGuiMCP::ImVec4(0.85f, 0.50f, 0.20f, 1.0f));
                     ImGuiMCP::PushStyleColor(ImGuiMCP::ImGuiCol_ButtonActive,  ImGuiMCP::ImVec4(0.95f, 0.60f, 0.25f, 1.0f));
-                    if (ImGuiMCP::Button("Reset to Default Key", ImGuiMCP::ImVec2(-1.0f, 0.0f))) {
+                    if (ButtonFit(Tr("advanced.reset_default_key", "Reset to Default Key"), ImGuiMCP::ImVec2(-1.0f, 0.0f), uiScale)) {
                         RestoreAliasToDefault(idx);
                         SaveButtonOrder();
                         ImGuiMCP::CloseCurrentPopup();
@@ -7909,7 +8697,7 @@ static void __stdcall RenderLauncher() {
         bool exclusionsTabOpen = false;
         if (g_ShowExclusionsTab.load()) {
             exclusionsTabOpen = ImGuiMCP::BeginTabItem(
-                (FontAwesome::UnicodeToUtf8(0xf05e) + "  Exclusions").c_str(), nullptr, 0); // fa-ban
+                (FontAwesome::UnicodeToUtf8(0xf05e) + "  " + Tr("tab.exclusions", "Exclusions")).c_str(), nullptr, 0); // fa-ban
             if (exclusionsTabOpen) {
                 DrawExclusionsTabContent();
                 ImGuiMCP::EndTabItem();
@@ -7919,6 +8707,7 @@ static void __stdcall RenderLauncher() {
 
         ImGuiMCP::EndTabBar();
     }
+    ImGuiMCP::PopStyleColor(5);
 
     ImGuiMCP::PopStyleVar(3);
     ImGuiMCP::PopStyleColor(3);
@@ -7928,9 +8717,10 @@ static void __stdcall RenderLauncher() {
     ImGuiMCP::PopStyleColor(4);
 
     // Keep on top
-    if (!g_ExclusionsPopupOpen) {
-        if (auto* w = ImGuiMCP::FindWindowByName("###RisaMenuLauncher"))
+    if (!g_ExclusionsPopupOpen && NowMs() >= g_LanguageComboActiveUntilMs.load()) {
+        if (auto* w = ImGuiMCP::FindWindowByName("###RisaMenuLauncher")) {
             ImGuiMCP::BringWindowToDisplayFront(w);
+        }
     }
 }
 
@@ -8233,6 +9023,150 @@ static void TryManageCSHotkey(bool lateRetry) {
     }
 }
 
+// Rewrite iHotkey under [Controls.Keyboard] in Mod Function Menu's TOML, preserving every other line
+// (including the gamepad iHotkey). Returns 1 if changed, 0 if already the target, negative on error.
+// Set an integer key under [Controls.Keyboard] in Mod Function Menu's TOML (iHotkey or iExtraExit).
+static int SetModFunctionMenuKey(const std::filesystem::path& toml, const char* keyName, int newValue) {
+    if (!std::filesystem::exists(toml)) {
+        SKSE::log::warn("SetModFunctionMenuKey: {} not found.", toml.string());
+        return -1;
+    }
+    const std::string wantKey = ToUpper(keyName);
+    std::vector<std::string> lines;
+    std::string section;
+    bool found = false, changed = false;
+    {
+        std::ifstream in(toml);
+        std::string line;
+        while (std::getline(in, line)) {
+            const std::string t = TrimStr(line);
+            if (!t.empty() && t.front() == '[') {
+                section = ToUpper(t);
+            } else if (section == "[CONTROLS.KEYBOARD]" && !found) {
+                const auto eq = t.find('=');
+                if (eq != std::string::npos && ToUpper(TrimStr(t.substr(0, eq))) == wantKey) {
+                    found = true;
+                    std::string cur = TrimStr(t.substr(eq + 1));
+                    const auto c = cur.find('#'); if (c != std::string::npos) cur = TrimStr(cur.substr(0, c));
+                    int curVal = -1; try { curVal = std::stoi(cur); } catch (...) {}
+                    if (curVal != newValue) { line = std::string(keyName) + " = " + std::to_string(newValue); changed = true; }
+                }
+            }
+            lines.push_back(line);
+        }
+    }
+    if (!found) {
+        SKSE::log::warn("SetModFunctionMenuKey: {} not found under [Controls.Keyboard] in {}.", keyName, toml.string());
+        return -1;
+    }
+    if (!changed) return 0;
+    std::ofstream out(toml, std::ios::trunc);
+    if (!out.is_open()) { SKSE::log::error("SetModFunctionMenuKey: cannot write {}.", toml.string()); return -2; }
+    for (const auto& l : lines) out << l << "\n";
+    LogFileChange(toml.string(), std::string(keyName) + " = " + std::to_string(newValue));
+    return 1;
+}
+static int SetModFunctionMenuHotkey(const std::filesystem::path& toml, int newValue) {
+    return SetModFunctionMenuKey(toml, "iHotkey", newValue);
+}
+
+static void TryManageModFunctionMenuHotkey(bool lateRetry) {
+    if (g_ExcludeMod[AI_ModFunctionMenu].load()) return;
+    if (g_ModFunctionMenuIniManaged.load() || !IsPluginPresent("ccld_ModFunctionMenu")) return;
+
+    const long long now = NowMs();
+    if (lateRetry) {
+        const long long last = g_LastModFunctionMenuIniAttemptMs.exchange(now);
+        if (now - last < 2000) return;
+    }
+
+    // Mod Function Menu defaults to F1 (= our launcher key) and reads the engine input queue. Relocate
+    // its hotkey onto the unpressable F20 so the physical key is freed; the launcher opens it by
+    // injecting F20. Takes effect after a restart (it reads the TOML at plugin load).
+    constexpr int kParkKey = 0x6B; // F20 (DirectInput scancode)
+    const std::filesystem::path tomlPath = "Data/SKSE/Plugins/ccld_ModFunctionMenu.toml";
+    const int result = SetModFunctionMenuHotkey(tomlPath, kParkKey);
+    if (result < 0) return;
+
+    g_ModFunctionMenuConfig.toggleDIK = static_cast<WORD>(kParkKey);
+    g_ModFunctionMenuConfig.toggleVK  = VKFromDIK(static_cast<WORD>(kParkKey));
+    g_ModFunctionMenuIniManaged.store(true);
+    if (result == 1) {
+        MarkConfigRestartRequired("Mod Function Menu hotkey");
+        SKSE::log::info("TryManageModFunctionMenuHotkey: Mod Function Menu hotkey -> F20 (was F1).{}",
+            lateRetry ? " Restart Skyrim once so Mod Function Menu reads the generated setting." : "");
+    } else {
+        SKSE::log::info("TryManageModFunctionMenuHotkey: Mod Function Menu hotkey is already F20.");
+    }
+}
+
+static void TryManageFLICKHotkey(bool lateRetry) {
+    if (g_ExcludeMod[AI_FLICK].load()) {
+        if (g_FLICKHotkeyManaged.exchange(false)) {
+            SetFLICKHotkeyEnabled(true);
+            SKSE::log::info("TryManageFLICKHotkey: FLICK excluded; native hotkey re-enabled via API.");
+        }
+        return;
+    }
+    if (!IsPluginPresent("FUCK")) return;
+
+    const long long now = NowMs();
+    if (lateRetry) {
+        const long long last = g_LastFLICKHotkeyAttemptMs.exchange(now);
+        if (now - last < 2000) return;
+    }
+
+    if (SetFLICKHotkeyEnabled(false)) {
+        // The API disables FLICK's own native hotkey processing. Risa's separately configured alias
+        // remains user-controlled and opens FLICK through the API.
+                g_FLICKHotkeyManaged.store(true);
+        const long long until = now + 15000;
+        long long oldUntil = g_FLICKHotkeyReassertUntilMs.load();
+        while (oldUntil < until && !g_FLICKHotkeyReassertUntilMs.compare_exchange_weak(oldUntil, until)) {}
+        SKSE::log::info("TryManageFLICKHotkey: disabled FLICK native hotkey via API.");
+    }
+}
+
+static void StartFLICKHotkeyMonitor() {
+    static std::atomic<bool> started{ false };
+    if (started.exchange(true)) return;
+
+    std::thread([] {
+        for (;;) {
+            std::this_thread::sleep_for(std::chrono::seconds(2));
+            if (!::GetModuleHandleW(L"FUCK.dll")) continue;
+            if (SetFLICKHotkeyEnabled(false)) {
+                g_FLICKHotkeyManaged.store(true);
+            }
+        }
+    }).detach();
+    SKSE::log::info("StartFLICKHotkeyMonitor: periodic API reassertion started.");
+}
+
+static void TryManageOPSHotkey(bool lateRetry) {
+    // We no longer FREE OPS's key: rewriting its live Papyrus key registration froze input and fought
+    // the user's own rebinds. OPS's default key (Numpad 1) doesn't clash with the launcher, so we leave
+    // it alone and just provide the launcher button. But an earlier build forced Hotkey=0 into existing
+    // saves, killing the key - so if we find it disabled, restore Numpad 1 once. Otherwise never touch it.
+    if (g_OPSKeyManaged.load() || !IsOPSInstalled()) return;
+    const long long now = NowMs();
+    if (lateRetry) {
+        const long long last = g_LastOPSKeyAttemptMs.exchange(now);
+        if (now - last < 2000) return;
+    }
+    auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
+    RE::BSTSmartPointer<RE::BSScript::Object> obj;
+    if (!GetOPSObject(vm, obj)) return; // quest not bound yet - retry later
+    auto* prop = obj->GetProperty("Hotkey");
+    if (prop && prop->GetSInt() == 0) {
+        SetOPSHotkey(79); // Numpad 1 - undo the earlier build's disable
+        SKSE::log::info("TryManageOPSHotkey: restored Outfit Preview Selector hotkey to Numpad 1 (an earlier build had disabled it).");
+    }
+    g_OPSConfig.toggleDIK = 0x4F;
+    g_OPSConfig.toggleVK = VK_NUMPAD1;
+    g_OPSKeyManaged.store(true);
+}
+
 static void TryManageCatMenuHotkey(bool lateRetry) {
     if (g_ExcludeMod[AI_CatMenu].load()) return;
     if (g_CatMenuIniManaged.load() || !IsPluginPresent("catmenu")) return;
@@ -8275,9 +9209,20 @@ static void TryManageDragonbornHotkey(bool lateRetry) {
         if (now - last < 2000) return;
     }
 
+    // Preferred path (Dragonborn's Toolkit v0.5+): disable its native hotkey listener at RUNTIME via
+    // the exported API. No SkyrimCheatMenu.json edit, no restart. The launcher opens/closes via API.
+    // Re-applied on every launch (the toolkit re-enables its listener each session), so it's idempotent.
+    if (SetDragonbornHotkeyEnabled(false)) {
+        g_DragonbornConfig.toggleKeyName = "UNASSIGNED";
+        g_DragonbornConfig.toggleDIK = 0;
+        g_DragonbornConfig.toggleVK = 0;
+        g_DragonbornIniManaged.store(true);
+        SKSE::log::info("TryManageDragonbornHotkey: disabled Dragonborn's Toolkit native hotkey via runtime API (no file edit, no restart).");
+        return;
+    }
+
+    // Fallback for older builds without the runtime hotkey export: edit the JSON (takes effect next restart).
     const std::filesystem::path jsonPath = "Data/SKSE/Plugins/SkyrimCheatMenu.json";
-    // The launcher calls Dragonborn's private SetMenuOpen(bool), so its native input
-    // listener can be disabled completely. The optional F1 alias remains ours.
     const int result = SetJsonRootValue(jsonPath, "toggleKey", 0);
     if (result < 0) return;
 
@@ -8669,6 +9614,14 @@ static void CaptureOriginalHotkeys() {
         SKSE::log::warn("HotkeyBackup: SKIP CatMenu.toggle_key = 591 (historical Risa F20 relocation).");
     else
         CaptureOriginal("CatMenu.toggle_key", catMenuKey, 592);
+    // Mod Function Menu (TOML [Controls.Keyboard] iHotkey, a DIK). Relocated to 107 (F20); skip that.
+    {
+        const int mfmKey = ReadModFunctionMenuHotkey();
+        if (mfmKey == 0x6B)
+            SKSE::log::warn("HotkeyBackup: SKIP ModFunctionMenu.iHotkey = 107 (our F20 relocation, not a real original).");
+        else
+            CaptureOriginal("ModFunctionMenu.iHotkey", nlohmann::json(mfmKey), 59);
+    }
     // Dragonborn's Toolkit (JSON root toggleKey, normally a string like "F1"). Disabled = int 0.
     const auto dragonbornKey = ReadJsonValue("Data/SKSE/Plugins/SkyrimCheatMenu.json", "", "toggleKey");
     if (legacyRelocations && dragonbornKey == nlohmann::json(108))
@@ -8775,22 +9728,7 @@ static void ManageModHotkeys() {
         }
     }
     if (g_FLICKConfig.enabled && !g_ExcludeMod[AI_FLICK].load()) {
-        auto flick = FindFLICKKeybinds();
-        if (flick.empty()) {
-            SKSE::log::warn("ManageModHotkeys: FLICK keybinds not found at any known path; F7 NOT disabled.");
-        } else {
-            // FLICK is controlled exclusively through its official API. A zero key disables
-            // its native listener, while the optional F7 alias remains handled by this plugin.
-            const int result = SetIniValue(flick, "iToggleFUCK_Key", 0);
-            if (result >= 0) {
-                g_FLICKConfig.toggleDIK = 0;
-                g_FLICKConfig.toggleVK = 0;
-            }
-            if (result == 1) {
-                any = true;
-                SKSE::log::info("ManageModHotkeys: disabled FLICK's native hotkey at {}; opened exclusively via API.", flick.string());
-            }
-        }
+        TryManageFLICKHotkey(false);
     }
     if (any) {
         MarkConfigRestartRequired("supported mod hotkeys");
@@ -8843,6 +9781,8 @@ static bool IsModInstalled(int aliasIdx) {
         case AI_Dragonborn: return g_DragonbornConfig.enabled;
         case AI_ReShade:   return g_ReShadeConfig.enabled;
         case AI_QAR:       return IsQARInstalled();
+        case AI_ModFunctionMenu: return g_ModFunctionMenuConfig.enabled;
+        case AI_OPS:       return g_OPSConfig.enabled;
         default:           return false;
     }
 }
@@ -8867,6 +9807,8 @@ static const char* GetModDisplayName(int aliasIdx) {
         case AI_ReShade:       return "ReShade";
         case AI_PartySettings: return "Skyrim Party Sheet";
         case AI_QAR:           return "Quick Armor Rebalance";
+        case AI_ModFunctionMenu: return "Mod Function Menu";
+        case AI_OPS:           return "Outfit Preview Selector";
         default:               return "";
     }
 }
@@ -8901,6 +9843,10 @@ static std::string GetModNativeHotkeyString(int aliasIdx) {
             return FormatHotkey(g_KreatEConfig.toggleDIK);
         case AI_CatMenu:
             return FormatHotkey(g_CatMenuConfig.toggleDIK);
+        case AI_ModFunctionMenu:
+            return FormatHotkey(g_ModFunctionMenuConfig.toggleDIK);
+        case AI_OPS:
+            return FormatHotkey(g_OPSConfig.toggleDIK);
         case AI_Dragonborn:
             return FormatHotkey(g_DragonbornConfig.toggleDIK);
         case AI_CS:
@@ -8950,10 +9896,9 @@ static std::string GetExclusionDetailString(int aliasIdx) {
                    "Default values: ToggleKeys = 0x0E | OverrideToggleKeys = false\n"
                    "Changed to: ToggleKeys = F16 (unpressable) | OverrideToggleKeys = true\n";
         case AI_FLICK:
-            return "Path: keybinds_user.ini (falls back to keybinds.ini if user file doesn't exist)\n"
+            return "Path: RequestFUCK API SetHotkeyEnabled(false)\n"
                    "Default key: F7\n"
-                   "Default value: iToggleFUCK_Key = 65\n"
-                   "Changed to: iToggleFUCK_Key = 0 (native hotkey disabled; opened through FLICK's API)\n";
+                   "Changed to: native hotkey disabled live; keybind files are not edited\n";
         case AI_DebugMenu:
             return "Path: MCM\\Settings\\DebugMenu.ini (or MCM\\Config\\DebugMenu\\settings.ini)\n"
                    "Default key: F1\n"
@@ -8989,6 +9934,16 @@ static std::string GetExclusionDetailString(int aliasIdx) {
             return "Path: None (opened through Papyrus call)\n"
                    "Default key: None\n"
                    "Changed to: Not managed (hotkey is unmapped by default in its MCM)\n";
+        case AI_ModFunctionMenu:
+            return "Path: SKSE\\Plugins\\ccld_ModFunctionMenu.toml\n"
+                   "Default key: F1\n"
+                   "Default value: [Controls.Keyboard] iHotkey = 59\n"
+                   "Changed to: iHotkey = F20 (unpressable)\n";
+        case AI_OPS:
+            return "Path: None (MCM Hotkey property on the OutfitPreviewSe script, in the save)\n"
+                   "Default key: Numpad 1\n"
+                   "Default value: Hotkey = 79\n"
+                   "Changed to: Hotkey = 0 (disabled). Opened through the mod's SKSE mod events; no file edit.\n";
         default:
             return "";
     }
@@ -9020,6 +9975,8 @@ static WORD GetModNativeKey(int aliasIdx) {
         case AI_DebugMenu: return g_DebugMenuConfig.toggleDIK;
         case AI_KreatE:    return g_KreatEConfig.toggleDIK;
         case AI_CatMenu:   return g_CatMenuConfig.toggleDIK;
+        case AI_ModFunctionMenu: return g_ModFunctionMenuConfig.toggleDIK;
+        case AI_OPS:       return g_OPSConfig.toggleDIK;
         case AI_Dragonborn:return g_DragonbornConfig.toggleDIK;
         case AI_CS:        return g_CSConfig.toggleDIK;
         case AI_CSEditor:  return g_CSConfig.editorDIK;
@@ -9048,6 +10005,8 @@ static std::string GetBackupKeyString(int aliasIdx, bool forceModDefaults) {
         case AI_DebugMenu: backupId = "DebugMenu.uOpenMenuHotkey"; modDefaultVal = 59;   break; // F1
         case AI_KreatE:    backupId = "KreatE.GUIToggleKeys";      modDefaultVal = VK_END; break;
         case AI_CatMenu:   backupId = "CatMenu.toggle_key";        modDefaultVal = 577;  break; // ImGui F6
+        case AI_ModFunctionMenu: backupId = "ModFunctionMenu.iHotkey"; modDefaultVal = 59; break; // F1
+        case AI_OPS:       backupId = "OPS.Hotkey";                modDefaultVal = 79;   break; // Numpad 1
         case AI_Dragonborn:backupId = "Dragonborn.toggleKey";      modDefaultVal = "F1"; break;
         case AI_ReShade:   backupId = "ReShade.KeyOverlay";        modDefaultVal = "36,0,0,0"; break; // Home
         case AI_SearchUI:  return NameFromDIK(0x3E); // SearchUI uses F4
@@ -9149,13 +10108,7 @@ static bool RestoreModDefaults(int aliasIdx, bool forceModDefaults) {
             text("Data/SKSE/Plugins/ImmersiveEquipmentDisplays.ini", "OverrideToggleKeys", "IED.OverrideToggleKeys", "false");
             break;
         case AI_FLICK:
-            if (auto flick = FindFLICKKeybinds(); !flick.empty()) {
-                nlohmann::json o = GetOriginal("FLICK.iToggleFUCK_Key");
-                const bool fromBak = !forceModDefaults && o.is_number_integer();
-                const int v = fromBak ? o.get<int>() : 65;
-                const int r = SetIniValue(flick, "iToggleFUCK_Key", v);
-                track(flick, r);
-            }
+            SetFLICKHotkeyEnabled(true);
             break;
         case AI_DebugMenu:
             {
@@ -9203,8 +10156,33 @@ static bool RestoreModDefaults(int aliasIdx, bool forceModDefaults) {
                 track("Data/SKSE/Plugins/catmenu/settings.json", r);
             }
             break;
-        case AI_Dragonborn:
+        case AI_ModFunctionMenu:
             {
+                nlohmann::json o = GetOriginal("ModFunctionMenu.iHotkey");
+                const bool fromBak = !forceModDefaults && o.is_number_integer();
+                const int v = fromBak ? o.get<int>() : 59; // F1
+                const int r = SetModFunctionMenuHotkey("Data/SKSE/Plugins/ccld_ModFunctionMenu.toml", v);
+                track("Data/SKSE/Plugins/ccld_ModFunctionMenu.toml", r);
+            }
+            break;
+        case AI_OPS:
+            // OPS's hotkey lives in the save (MCM Hotkey property), not a file. Hand the key back by
+            // setting the property to the saved value (or Numpad 1). No-op if the quest isn't bound yet.
+            {
+                nlohmann::json o = GetOriginal("OPS.Hotkey");
+                const bool fromBak = !forceModDefaults && o.is_number_integer();
+                const int v = fromBak ? o.get<int>() : 79; // Numpad 1
+                if (SetOPSHotkey(v))
+                    SKSE::log::info("RestoreModDefaults: restored Outfit Preview Selector Hotkey = {}.", v);
+            }
+            break;
+        case AI_Dragonborn:
+            // Dragonborn's Toolkit v0.5+ is managed only through its runtime API - Risa never edits
+            // SkyrimCheatMenu.json, so there is nothing in the file to restore. Just hand the key back
+            // live by re-enabling its native listener. Only older builds fall back to the JSON write.
+            if (SetDragonbornHotkeyEnabled(true)) {
+                SKSE::log::info("RestoreModDefaults: re-enabled Dragonborn's Toolkit native hotkey via runtime API.");
+            } else {
                 nlohmann::json o = GetOriginal("Dragonborn.toggleKey");
                 const bool fromBak = !forceModDefaults && !o.is_null();
                 const nlohmann::json v = fromBak ? o : nlohmann::json("F1");
@@ -9346,14 +10324,7 @@ static bool RestoreAllModDefaults(bool forceModDefaults) {
     ini("Data/SKSE/Plugins/ImmersiveEquipmentDisplays.ini", "ToggleKeys", "IED.ToggleKeys", 0x0E, true);
     text("Data/SKSE/Plugins/ImmersiveEquipmentDisplays.ini", "OverrideToggleKeys", "IED.OverrideToggleKeys", "false");
 
-    if (auto flick = FindFLICKKeybinds(); !flick.empty()) {
-        nlohmann::json o = GetOriginal("FLICK.iToggleFUCK_Key");
-        const bool fromBak = !forceModDefaults && o.is_number_integer();
-        const int v = fromBak ? o.get<int>() : 65; // F7
-        const int r = SetIniValue(flick, "iToggleFUCK_Key", v);
-        track(flick, r);
-        SKSE::log::info("Restore[{}] iToggleFUCK_Key = {}", fromBak ? "BACKUP" : "default", v);
-    }
+    SetFLICKHotkeyEnabled(true);
 
     {
         std::filesystem::path dm = "Data/MCM/Settings/DebugMenu.ini";
@@ -9396,6 +10367,26 @@ static bool RestoreAllModDefaults(bool forceModDefaults) {
         SKSE::log::info("Restore[{}] CatMenu toggle_key = {}", fromBak ? "BACKUP" : "default", v.dump());
     }
     {
+        nlohmann::json o = GetOriginal("ModFunctionMenu.iHotkey");
+        const bool fromBak = !forceModDefaults && o.is_number_integer();
+        const int v = fromBak ? o.get<int>() : 59; // F1
+        const int r = SetModFunctionMenuHotkey("Data/SKSE/Plugins/ccld_ModFunctionMenu.toml", v);
+        track("Data/SKSE/Plugins/ccld_ModFunctionMenu.toml", r);
+        SKSE::log::info("Restore[{}] ModFunctionMenu iHotkey = {}", fromBak ? "BACKUP" : "default", v);
+    }
+    {
+        nlohmann::json o = GetOriginal("OPS.Hotkey");
+        const bool fromBak = !forceModDefaults && o.is_number_integer();
+        const int v = fromBak ? o.get<int>() : 79; // Numpad 1
+        if (SetOPSHotkey(v))
+            SKSE::log::info("Restore[{}] OPS Hotkey = {}", fromBak ? "BACKUP" : "default", v);
+    }
+    // Dragonborn's Toolkit v0.5+ is managed only through its runtime API - Risa never edits
+    // SkyrimCheatMenu.json, so nothing in the file needs restoring. Hand the key back live by
+    // re-enabling its native listener; only older builds fall back to the JSON write.
+    if (SetDragonbornHotkeyEnabled(true)) {
+        SKSE::log::info("Restore[API] Dragonborn native hotkey re-enabled via runtime API.");
+    } else {
         nlohmann::json o = GetOriginal("Dragonborn.toggleKey");
         const bool fromBak = !forceModDefaults && !o.is_null();
         const nlohmann::json v = fromBak ? o : nlohmann::json("F1");
@@ -9504,11 +10495,16 @@ static void MessageHandler(SKSE::MessagingInterface::Message* msg) {
         LoadCSConfig();
         LoadPartySheetConfig();
         LoadCatMenuConfig();
+        LoadModFunctionMenuConfig();
+        LoadOPSConfig();
         LoadDragonbornConfig();
         LoadReShadeConfig();
         TryManageKreatEHotkey();
         TryManageCSHotkey();
         TryManageCatMenuHotkey();
+        TryManageModFunctionMenuHotkey();
+        TryManageFLICKHotkey();
+        TryManageOPSHotkey();
         TryManageDragonbornHotkey();
         // Retry add-on registration in case ReShade's add-on API wasn't ready at plugin load.
         // Still early enough (before the renderer/swapchain) to catch init_effect_runtime.
@@ -9518,6 +10514,8 @@ static void MessageHandler(SKSE::MessagingInterface::Message* msg) {
         }
         ManageReShadeHotkey();         // disable ReShade's overlay key via the add-on API (non-add-on left unmanaged)
         ManageModHotkeys();            // disable OAR/FLICK native keys; relocate dMenu/IC/IED
+        TryManageFLICKHotkey(true);     // FLICK enables its hotkeys at DataLoaded; reassert after that pass.
+        StartFLICKHotkeyMonitor();
         // Debug Menu's collision was handled at the earliest plugin-load point.
         // NOTE: launcher key is intentionally NOT auto-reassigned — the user wants to keep F1.
         // F1 also being Debug Menu's key is fine: a PHYSICAL F1 toggles our launcher (Debug
@@ -9547,6 +10545,9 @@ static void MessageHandler(SKSE::MessagingInterface::Message* msg) {
     }
 
     case SKSE::MessagingInterface::kInputLoaded: {
+        LoadOPSConfig();
+        TryManageFLICKHotkey(true);
+        TryManageOPSHotkey(true);
         auto* mgr = RE::BSInputDeviceManager::GetSingleton();
         if (mgr) {
             mgr->AddEventSink(RisaInputSink::GetSingleton());
@@ -9571,7 +10572,7 @@ static void MessageHandler(SKSE::MessagingInterface::Message* msg) {
 // Plugin entry point
 // ============================================================================
 SKSEPluginInfo(
-    .Version              = REL::Version{ 1, 5, 4, 0 },
+    .Version              = REL::Version{ 1, 5, 5, 0 },
     .Name                 = "RisaAllInOneMenu",
     .Author               = "Risa",
     .SupportEmail         = "",
@@ -9612,6 +10613,9 @@ SKSEPluginLoad(const SKSE::LoadInterface* skse) {
     TryManageKreatEHotkey();
     TryManageCSHotkey();
     TryManageCatMenuHotkey();
+    TryManageModFunctionMenuHotkey();
+    TryManageFLICKHotkey();
+    TryManageOPSHotkey();
     TryManageDragonbornHotkey();
     LoadDebugMenuConfig();
     ManageDebugMenuKey();

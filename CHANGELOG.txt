@@ -4,6 +4,26 @@ Newest first. "In progress" = built/deployed locally but not yet released.
 Claude keeps this file up to date automatically as changes are made.
 
 
+1.5.5
+-----
+New:
+- Added support for Mod Function Menu
+- Added Language support: New dropdown so you can pick which translation Risa loads (changes apply right away, note that you need the translation.json in "SKSE\Plugins\RisaAllInOneMenu\Translations\" folder for it to show up more info on the mod page)
+-Added a Font Scale slider: A few elements still scale along with the text by design, because scaling font alone without adjusting everything around it just breaks the layout however this will help alot for people who use different fonts.
+
+Changed:
+- FLICK: API access to Keys/Menu no more .ini edits, thanks to the author Fuzzlesz adding support~
+- Dragonborn's Toolkit: API access to Keys/Menu no more .ini edits, thanks to the author ModsLab!~
+- Key tooltips now show exactly which key a mod is sitting on, or if it's handled through an API.
+- Overhauled a bunch of tooltips to be simpler and less confusing.
+- New tab colors so hover, selected, and unselected tabs are easy to tell apart.
+- Big pass on how the menu scales, etter spacing and readability.
+Fixed:
+- The Advanced Bindings popup no longer disappears when you pick a launcher key.
+- SearchUI now closes with your menu key and Esc.
+- Debug Menu now closes with Esc.
+- many, many elements being misplaced when scaling at extreme sizes.
+
 1.5.4
 -----
 New:
