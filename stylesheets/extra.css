@@ -2,6 +2,18 @@
   color: #e5a93b;
 }
 
+.blue {
+  color: #5c95db;
+}
+
+.gold {
+  color: #e5a93b;
+}
+
+.muted {
+  color: #8b929b;
+}
+
 .integration-table {
   overflow-x: auto;
   margin: 1.5rem 0;
@@ -10,6 +22,7 @@
 .integration-table table {
   width: 100%;
   border-collapse: collapse;
+  table-layout: fixed;
 }
 
 .integration-table td {
@@ -25,8 +38,24 @@
 }
 
 .integration-table td:nth-child(2) {
-  min-width: 15rem;
+  width: 1%;
   white-space: nowrap;
+}
+
+.integration-table td:nth-child(3),
+.integration-table td:nth-child(4),
+.integration-table td:nth-child(5) {
+  width: 1%;
+  white-space: nowrap;
+  text-align: center;
+}
+
+.integration-table td:nth-child(6) {
+  width: 19%;
+}
+
+.integration-table td:nth-child(7) {
+  width: auto;
 }
 
 .integration-table small {

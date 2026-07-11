@@ -272,6 +272,8 @@
           
             
               
+                
+              
               <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
                 <div class="md-sidebar__scrollwrap">
                   <div class="md-sidebar__inner">
@@ -426,7 +428,9 @@
             
             
               
-              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" hidden>
                 <div class="md-sidebar__scrollwrap">
                   <div class="md-sidebar__inner">
                     
@@ -469,6 +473,8 @@
               <article class="md-content__inner md-typeset">
                 
                   
+  
+
 
 
   
@@ -479,140 +485,240 @@
 <p>This page shows how Risa integrates each supported menu and how each original hotkey is handled.</p>
 <h2 id="legend">Legend<a class="headerlink" href="#legend" title="Permanent link">&para;</a></h2>
 <ul>
-<li><span class="perfect">Gold text</span> = perfect integration</li>
-<li>✅ = update-resilient integration</li>
-<li>⚠️ = compatibility update may be needed</li>
-<li>▶️ = direct open/close through a non-key method</li>
+<li><span class="perfect">Gold letters</span> = perfect integration</li>
+<li><span class="blue">✅</span> = update-resilient integration</li>
+<li><span class="gold">⚠️</span> = compatibility update may be needed</li>
+<li><span class="blue">▶️</span> = direct open/close through a non-key method</li>
 <li>⌨️ = key freed live with no file edit</li>
 <li>💾 = key freed through INI/JSON/config editing</li>
-<li>✏️ = API request pending or historically requested from the original mod author</li>
+<li><span class="gold">✏️</span> = API request pending or historically requested from the original mod author</li>
 </ul>
 <div class="integration-table">
 <table>
 <tbody>
 <tr>
-<td>✅ ▶️ ⌨️</td>
+<td><span class="blue">✅</span></td>
+<td><span class="blue">▶️</span></td>
+<td>⌨️</td>
+<td></td>
+<td></td>
 <td><strong class="perfect">SKSE Menu Framework</strong></td>
 <td>Added hotkey API.</td>
 </tr>
 <tr>
-<td>✅ ▶️ ⌨️</td>
+<td><span class="blue">✅</span></td>
+<td><span class="blue">▶️</span></td>
+<td>⌨️</td>
+<td></td>
+<td></td>
 <td><strong class="perfect">Mod Configuration Menu (MCM)</strong></td>
 <td>Opens directly to SkyUI's configuration panel.</td>
 </tr>
 <tr>
-<td>✅ ⌨️ ✏️</td>
-<td>SearchUI <small>F18</small></td>
+<td><span class="blue">✅</span></td>
+<td></td>
+<td>⌨️</td>
+<td><span class="gold">✏️</span></td>
+<td><strong class="blue">F18</strong></td>
+<td>SearchUI</td>
 <td>Hotkey managed live through Papyrus; no INI edit.</td>
 </tr>
 <tr>
-<td>⚠️ 💾 ✏️</td>
-<td>Open Animation Replacer <small>F13</small></td>
+<td><span class="gold">⚠️</span></td>
+<td></td>
+<td>💾</td>
+<td><span class="gold">✏️</span></td>
+<td><strong class="blue">F13</strong></td>
+<td>Open Animation Replacer</td>
 <td>Direct integration is version-dependent; primarily config-managed.</td>
 </tr>
 <tr>
-<td>⚠️ 💾 ✏️</td>
-<td>Immersive Equipment Displays 1.7.5b <small>F16</small></td>
+<td><span class="gold">⚠️</span></td>
+<td></td>
+<td>💾</td>
+<td><span class="gold">✏️</span></td>
+<td><strong class="blue">F16</strong></td>
+<td>Immersive Equipment Displays 1.7.5b</td>
 <td>Direct integration is version-dependent.</td>
 </tr>
 <tr>
-<td>⚠️ ▶️ ⌨️</td>
-<td>Debug Menu <small>F4</small></td>
+<td><span class="gold">⚠️</span></td>
+<td><span class="blue">▶️</span></td>
+<td>⌨️</td>
+<td><span class="gold">✏️</span></td>
+<td><strong class="blue">F4</strong></td>
+<td>Debug Menu</td>
 <td>Public API controls the menu and disables its hotkey live.</td>
 </tr>
 <tr>
-<td>⚠️</td>
-<td>dMenu</td>
-<td>Not supported; use the included edit.</td>
+<td><span class="gold">⚠️</span></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td class="muted">dMenu</td>
+<td class="muted">Not supported; use the included edit.</td>
 </tr>
 <tr>
-<td>⚠️ ✏️</td>
-<td>dMenu NG</td>
-<td>Not supported; use the included edit.</td>
+<td><span class="gold">⚠️</span></td>
+<td></td>
+<td></td>
+<td><span class="gold">✏️</span></td>
+<td></td>
+<td class="muted">dMenu NG</td>
+<td class="muted">Not supported; use the included edit.</td>
 </tr>
 <tr>
-<td>✅ ▶️ ⌨️</td>
+<td><span class="blue">✅</span></td>
+<td><span class="blue">▶️</span></td>
+<td>⌨️</td>
+<td></td>
+<td></td>
 <td><strong class="perfect">dMenu NG (Risa edit)</strong></td>
 <td>Supported API-enabled build.</td>
 </tr>
 <tr>
-<td>⚠️ ⌨️</td>
+<td><span class="gold">⚠️</span></td>
+<td></td>
+<td>⌨️</td>
+<td></td>
+<td></td>
 <td>Improved Camera SE 1.1.2.4228</td>
 <td>Key freed at the input level; no INI edit or public menu API.</td>
 </tr>
 <tr>
-<td>✅ ▶️ ⌨️</td>
+<td><span class="blue">✅</span></td>
+<td><span class="blue">▶️</span></td>
+<td>⌨️</td>
+<td></td>
+<td></td>
 <td><strong class="perfect">Improved Camera NG 2.0.0.1215</strong></td>
 <td>Uses the <code>ic menu</code> command path.</td>
 </tr>
 <tr>
-<td>✅ ⌨️</td>
+<td><span class="blue">✅</span></td>
+<td></td>
+<td>⌨️</td>
+<td></td>
+<td></td>
 <td><strong class="perfect">ENB Editor</strong></td>
 <td>Key freed at the input level; no INI edit or public menu API.</td>
 </tr>
 <tr>
-<td>✅ ▶️ ⌨️</td>
+<td><span class="blue">✅</span></td>
+<td><span class="blue">▶️</span></td>
+<td>⌨️</td>
+<td><span class="gold">✏️</span></td>
+<td></td>
 <td><strong class="perfect">FLICK</strong></td>
 <td>Uses the author's direct API.</td>
 </tr>
 <tr>
-<td>⚠️ 💾 ✏️</td>
-<td>KreatE <small>F18</small></td>
+<td><span class="gold">⚠️</span></td>
+<td></td>
+<td>💾</td>
+<td><span class="gold">✏️</span></td>
+<td><strong class="blue">F18</strong></td>
+<td>KreatE</td>
 <td>No author response; config-managed integration.</td>
 </tr>
 <tr>
-<td>⚠️ 💾 ✏️</td>
-<td>Community Shaders <small>F15/F19/F23/F24</small></td>
+<td><span class="gold">⚠️</span></td>
+<td></td>
+<td>💾</td>
+<td><span class="gold">✏️</span></td>
+<td><strong class="blue">F15/F19/F23/F24</strong></td>
+<td>Community Shaders</td>
 <td>API request sent; compatibility depends on the current build.</td>
 </tr>
 <tr>
-<td>✅ ▶️ ⌨️</td>
+<td><span class="blue">✅</span></td>
+<td><span class="blue">▶️</span></td>
+<td>⌨️</td>
+<td></td>
+<td></td>
 <td><strong class="perfect">Dragonborn's Toolkit</strong></td>
 <td>Uses the public Toolkit API for open/close and live hotkey control.</td>
 </tr>
 <tr>
-<td>⚠️ ▶️ 💾 ✏️</td>
-<td>CatMenu 2.0.1 <small>F21</small></td>
+<td><span class="gold">⚠️</span></td>
+<td><span class="blue">▶️</span></td>
+<td>💾</td>
+<td><span class="gold">✏️</span></td>
+<td><strong class="blue">F21</strong></td>
+<td>CatMenu 2.0.1</td>
 <td>Direct integration is version-dependent.</td>
 </tr>
 <tr>
-<td>⚠️ ▶️ 💾</td>
+<td><span class="gold">⚠️</span></td>
+<td><span class="blue">▶️</span></td>
+<td>💾</td>
+<td></td>
+<td></td>
 <td>ReShade 6.7.3+</td>
 <td>Add-on API opens the overlay; the overlay key is disabled through ReShade.ini.</td>
 </tr>
 <tr>
-<td>⚠️ ✏️</td>
+<td><span class="gold">⚠️</span></td>
+<td></td>
+<td></td>
+<td><span class="gold">✏️</span></td>
+<td></td>
 <td>Skyrim Party Sheet</td>
 <td>Blocked by DirectInput/raw input; author may add an API.</td>
 </tr>
 <tr>
-<td>⚠️ ▶️ ⌨️ ✏️</td>
+<td><span class="gold">⚠️</span></td>
+<td><span class="blue">▶️</span></td>
+<td>⌨️</td>
+<td><span class="gold">✏️</span></td>
+<td></td>
 <td>Quick Armor Rebalance</td>
 <td>Opens through Papyrus; close API is still pending.</td>
 </tr>
 <tr>
-<td>▶️ ✏️</td>
+<td></td>
+<td><span class="blue">▶️</span></td>
+<td></td>
+<td><span class="gold">✏️</span></td>
+<td></td>
 <td>Modex</td>
 <td>Not yet added; API discussion started.</td>
 </tr>
 <tr>
-<td>▶️ ✏️</td>
+<td></td>
+<td><span class="blue">▶️</span></td>
+<td></td>
+<td><span class="gold">✏️</span></td>
+<td></td>
 <td>Hotkey Reminder</td>
 <td>Not yet added; awaiting response.</td>
 </tr>
 <tr>
-<td>✏️</td>
+<td></td>
+<td></td>
+<td></td>
+<td><span class="gold">✏️</span></td>
+<td></td>
 <td>Armor &amp; Cloth / Weapon Transmog</td>
 <td>Not yet added; response pending.</td>
 </tr>
 <tr>
-<td>⚠️ 💾 ✏️</td>
-<td>Mod Function Menu <small>F20</small></td>
+<td><span class="gold">⚠️</span></td>
+<td></td>
+<td>💾</td>
+<td><span class="gold">✏️</span></td>
+<td><strong class="blue">F20</strong></td>
+<td>Mod Function Menu</td>
 <td>Key parked through TOML edit and opened by key injection.</td>
 </tr>
 <tr>
-<td>⚠️ ▶️ ⌨️ ✏️</td>
-<td>Outfit Preview Selector <small>Numpad 1</small></td>
+<td><span class="gold">⚠️</span></td>
+<td><span class="blue">▶️</span></td>
+<td>⌨️</td>
+<td><span class="gold">✏️</span></td>
+<td></td>
+<td>Outfit Preview Selector</td>
 <td>Opens through the mod event and manages its hotkey live through Papyrus.</td>
 </tr>
 </tbody>
@@ -625,8 +731,13 @@
 
 
 
+  
+  
 
 
+
+
+  
 
 
 
@@ -689,7 +800,7 @@
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.top", "navigation.instant", "navigation.tracking", "toc.follow", "search.suggest", "search.highlight", "content.code.copy"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.top", "navigation.instant", "navigation.tracking", "search.suggest", "search.highlight", "content.code.copy"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
       <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
