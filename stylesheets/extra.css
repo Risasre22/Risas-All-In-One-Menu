@@ -33,19 +33,23 @@
 
 .integration-table td:first-child {
   white-space: nowrap;
-  width: 1%;
+  width: 3rem;
+  min-width: 3rem;
   text-align: center;
 }
 
 .integration-table td:nth-child(2) {
-  width: 1%;
+  width: 3rem;
+  min-width: 3rem;
   white-space: nowrap;
+  text-align: center;
 }
 
 .integration-table td:nth-child(3),
 .integration-table td:nth-child(4),
 .integration-table td:nth-child(5) {
-  width: 1%;
+  width: 3rem;
+  min-width: 3rem;
   white-space: nowrap;
   text-align: center;
 }
