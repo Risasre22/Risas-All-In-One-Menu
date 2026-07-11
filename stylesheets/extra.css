@@ -38,14 +38,14 @@
 
 .integration-table td:first-child {
   white-space: nowrap;
-  width: 3rem;
-  min-width: 3rem;
+  width: 2.5rem;
+  min-width: 2.5rem;
   text-align: center;
 }
 
 .integration-table td:nth-child(2) {
-  width: 3rem;
-  min-width: 3rem;
+  width: 2.5rem;
+  min-width: 2.5rem;
   white-space: nowrap;
   text-align: center;
 }
