@@ -6,6 +6,12 @@ vcpkg/
 *.lib
 *.exp
 *.pdb
+*.codex-backup
+
+# Local translation/font assets not included in the 1.5.5-style release package
+Data/SKSE/Plugins/RisaAllInOneMenu/Fonts/
+Data/SKSE/Plugins/RisaAllInOneMenu/Translations/*
+!Data/SKSE/Plugins/RisaAllInOneMenu/Translations/en.json
 
 # Release archives
 *.7z

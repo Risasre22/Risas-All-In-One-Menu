@@ -3,6 +3,26 @@ RISA'S ALL IN ONE MENU - CHANGELOG
 Newest first. "In progress" = built/deployed locally but not yet released.
 Claude keeps this file up to date automatically as changes are made.
 
+1.5.6
+-----
+NEW:
+- Added support for Modex.
+- Added support for Outfit Preview Selector.
+- Added support for Hotkey Reminder.
+- Added Settings and Exclusions support for all three mods.
+
+CHANGED:
+- Renamed the uninstall and exclusion restore choices so user originals and original mod defaults are clearly distinguished.
+- Successful uninstall restores now archive captured settings as RisaAllInOneMenu_OriginalHotkeys_Completed.json for troubleshooting instead of deleting them.
+
+FIXED:
+- Fixed the uninstaller restore process and retained the active backup whenever restoring or archiving is incomplete.
+- Fixed Skyrim Party Sheet buttons not opening from the launcher.
+- Fixed Party Sheet modifier detection for customized hotkeys.
+- Fixed Hotkey Reminder changes not saving when closed with F1 or Escape.
+- Fixed Hotkey Reminder requiring Escape twice to close.
+- Fixed Modex's hotkey not being restored by Restore for Uninstall.
+
 
 1.5.5
 -----

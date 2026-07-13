@@ -102,7 +102,7 @@ static void DMenuApiMessageHandler(SKSE::MessagingInterface::Message* msg) {
     SKSE::log::info("dMenu API received via SKSE message (interface v{}).", iface->interfaceVersion);
 }
 
-static constexpr std::string_view kRisaMenuVersion = "1.5.5";
+static constexpr std::string_view kRisaMenuVersion = "1.5.6";
 static std::string g_RuntimeVersion = "Unknown";
 static std::string g_SKSEVersion = "Unknown";
 static std::string g_RuntimeEdition = "Unknown";
@@ -283,7 +283,10 @@ struct PartySheetConfig {
     WORD partyDIK = 0x40;      // F6
     WORD inspectDIK = 0x15;    // Y
     WORD characterDIK = 0x16;  // U
-    WORD modifierDIK = 0;
+    WORD settingsModifierDIK = 0;
+    WORD partyModifierDIK = 0;
+    WORD inspectModifierDIK = 0;
+    WORD characterModifierDIK = 0;
 };
 static PartySheetConfig g_PartySheetConfig;
 
@@ -308,6 +311,13 @@ struct OPSConfig {
     WORD toggleVK = VK_NUMPAD1;
 };
 static OPSConfig g_OPSConfig;
+
+struct ModexConfig {
+    bool enabled = false;
+    WORD toggleDIK = 0xD3; // Delete (Modex's default Open Menu Keybind = 211)
+    WORD toggleVK = VK_DELETE;
+};
+static ModexConfig g_ModexConfig;
 
 struct DragonbornConfig {
     bool enabled = false;
@@ -358,7 +368,9 @@ enum class ActiveMenu {
     SearchUI,
     QAR,
     ModFunctionMenu,
-    OPS
+    OPS,
+    Modex,
+    HotkeyReminder
 };
 static std::atomic<ActiveMenu> g_ActiveMenu{ ActiveMenu::None };
 static std::atomic<bool> g_OpenMCMWhenJournalReady{ false };
@@ -666,6 +678,29 @@ static bool IsPluginPresent(const char* moduleName) {
     if (!dllName.ends_with(".dll") && !dllName.ends_with(".DLL")) dllName += ".dll";
     std::error_code ec;
     return std::filesystem::exists(std::filesystem::path("Data/SKSE/Plugins") / dllName, ec);
+}
+
+// Simple Wheeler's dMenu port deliberately keeps the dMenu DLL name, but it is only a
+// compatibility bridge to SKSE Menu Framework. Do not expose it as a dMenu launcher entry.
+static bool IsSimpleWheelerDMenuPort() {
+    HMODULE module = ::GetModuleHandleA("dmenu.dll");
+    if (!module) return false;
+
+    char modulePath[MAX_PATH]{};
+    const DWORD length = ::GetModuleFileNameA(module, modulePath, static_cast<DWORD>(std::size(modulePath)));
+    if (length == 0 || length >= std::size(modulePath)) return false;
+
+    const std::filesystem::path path(modulePath);
+    std::error_code ec;
+    const auto fileSize = std::filesystem::file_size(path, ec);
+    const bool pathMatch = ToUpper(path.string()).find("SIMPLE WHEELER MENU") != std::string::npos;
+    const bool sizeMatch = !ec && fileSize == 1033216ull;
+    if (pathMatch || sizeMatch) {
+        SKSE::log::info("Detected Simple Wheeler dMenu bridge (pathMatch={}, sizeMatch={}, size={}); suppressing dMenu integration button.",
+            pathMatch, sizeMatch, ec ? 0ull : static_cast<unsigned long long>(fileSize));
+        return true;
+    }
+    return false;
 }
 
 static void LoadMFConfig() {
@@ -1123,7 +1158,7 @@ static void LoadDebugMenuConfig() {
 }
 
 static void LoadDMenuConfig() {
-    g_DMenuConfig.enabled = IsPluginPresent("dmenu");
+    g_DMenuConfig.enabled = IsPluginPresent("dmenu") && !IsSimpleWheelerDMenuPort();
     if (!g_DMenuConfig.enabled) return;
 
     // Default values
@@ -1355,7 +1390,10 @@ static void LoadPartySheetConfig() {
     g_PartySheetConfig.partyDIK = 0x40;
     g_PartySheetConfig.inspectDIK = 0x15;
     g_PartySheetConfig.characterDIK = 0x16;
-    g_PartySheetConfig.modifierDIK = 0;
+    g_PartySheetConfig.settingsModifierDIK = 0;
+    g_PartySheetConfig.partyModifierDIK = 0;
+    g_PartySheetConfig.inspectModifierDIK = 0;
+    g_PartySheetConfig.characterModifierDIK = 0;
 
     const std::filesystem::path ini = "Data/SKSE/Plugins/PartyUserSettings.ini";
     if (std::filesystem::exists(ini)) {
@@ -1381,16 +1419,46 @@ static void LoadPartySheetConfig() {
         readDIK("PartySheetHotkey", g_PartySheetConfig.partyDIK);
         readDIK("InspectCardHotkey", g_PartySheetConfig.inspectDIK);
         readDIK("CharacterSheetHotkey", g_PartySheetConfig.characterDIK);
-        readDIK("ModifierKey", g_PartySheetConfig.modifierDIK);
+        // Party Sheet 2.9 stores per-action modifier types: 0=None, 1=Alt, 2=Ctrl, 3=Shift.
+        // A value of -1 inherits the legacy shared ModifierKey.
+        const auto readModifierType = [&](const char* key, int fallback) {
+            char value[64]{};
+            ::GetPrivateProfileStringA("Hotkeys", key, "", value, sizeof(value), ini.string().c_str());
+            const std::string text = TrimStr(value);
+            if (text.empty()) return fallback;
+            try { return std::stoi(text, nullptr, 0); } catch (...) { return fallback; }
+        };
+        const auto modifierTypeToDIK = [](int type) -> WORD {
+            switch (type) {
+                case 1: return 0x38; // Alt
+                case 2: return 0x1D; // Ctrl
+                case 3: return 0x2A; // Shift
+                default: return 0;
+            }
+        };
+        const int legacyModifier = readModifierType("ModifierKey", 0);
+        const auto actionModifier = [&](const char* key) {
+            const int value = readModifierType(key, -1);
+            return modifierTypeToDIK(value < 0 ? legacyModifier : value);
+        };
+        g_PartySheetConfig.settingsModifierDIK = actionModifier("MenuSettingsModifier");
+        g_PartySheetConfig.partyModifierDIK = actionModifier("PartySheetModifier");
+        g_PartySheetConfig.inspectModifierDIK = actionModifier("InspectCardModifier");
+        g_PartySheetConfig.characterModifierDIK = actionModifier("CharacterSheetModifier");
     } else {
         SKSE::log::info("LoadPartySheetConfig: PartyUserSettings.ini has not been generated; using X/F6/Y/U defaults.");
     }
 
-    SKSE::log::info("LoadPartySheetConfig: settings={}, party={}, inspect={}, character={}, modifier={}",
-        FormatHotkey(g_PartySheetConfig.settingsDIK), FormatHotkey(g_PartySheetConfig.partyDIK),
-        FormatHotkey(g_PartySheetConfig.inspectDIK), FormatHotkey(g_PartySheetConfig.characterDIK),
-        FormatHotkey(g_PartySheetConfig.modifierDIK));
+    SKSE::log::info("LoadPartySheetConfig: settings={}, party={}, inspect={}, character={}",
+        FormatModifiedHotkey(g_PartySheetConfig.settingsDIK, g_PartySheetConfig.settingsModifierDIK),
+        FormatModifiedHotkey(g_PartySheetConfig.partyDIK, g_PartySheetConfig.partyModifierDIK),
+        FormatModifiedHotkey(g_PartySheetConfig.inspectDIK, g_PartySheetConfig.inspectModifierDIK),
+        FormatModifiedHotkey(g_PartySheetConfig.characterDIK, g_PartySheetConfig.characterModifierDIK));
 }
+
+static std::atomic<int> g_OPSOriginalKey{ 79 };
+static std::atomic<bool> g_OPSOriginalKeyCaptured{ false };
+static std::atomic<bool> g_OPSFirstApply{ true };
 
 // ---- Outfit Preview Selector (OPS) ----
 // OPS is a Papyrus/Scaleform mod (ESP OutfitPreviewSelector.esp). It opens/closes its "CustomMenu" in
@@ -1399,16 +1467,20 @@ static void LoadPartySheetConfig() {
 // OutfitPreviewSeectorQ (script OutfitPreviewSe). We open/close via the events, track state via
 // RE::UI, and free the key by setting Hotkey to 0 (no INI, no file edit; lives in the save).
 static bool IsOPSInstalled() {
-    // OPS support is temporarily DROPPED: its menu freezes input when opened with Risa loaded, and its
-    // installed version has no clean external open/close (the author's OPS_NativePreviewOpen event isn't
-    // in it yet). Reporting "not installed" hides the button, the settings row, and all key management,
-    // so Risa never touches OPS. The rest of the OPS integration is kept for when the author ships a
-    // proper API. To re-enable, restore the LookupModByName check below.
-    return false;
-#if 0
     auto* dh = RE::TESDataHandler::GetSingleton();
     return dh && dh->LookupModByName("OutfitPreviewSelector.esp") != nullptr;
-#endif
+}
+
+static bool IsModexInstalled() {
+    return std::filesystem::exists("SKSE/Plugins/Modex.dll") || std::filesystem::exists("Data/SKSE/Plugins/Modex.dll");
+}
+
+// Hotkey Reminder 1.0.7+ global Papyrus API integration.
+static bool IsHotkeyReminderInstalled() {
+    auto* dh = RE::TESDataHandler::GetSingleton();
+    return (dh && dh->LookupModByName("HotkeyReminder.esp") != nullptr) ||
+           std::filesystem::exists("Data/HotkeyReminder.esp") ||
+           std::filesystem::exists("HotkeyReminder.esp");
 }
 
 static void SendOPSModEvent(const char* eventName) {
@@ -1422,6 +1494,26 @@ static void SendOPSModEvent(const char* eventName) {
 static bool IsOPSMenuOpen() {
     auto* ui = RE::UI::GetSingleton();
     return ui && ui->IsMenuOpen("CustomMenu");
+}
+
+static bool IsModexMenuOpen() {
+    auto* ui = RE::UI::GetSingleton();
+    return ui && (ui->IsMenuOpen("Modex") || ui->IsMenuOpen("ModExplorerMenu"));
+}
+
+static bool GetOPSObject(RE::BSScript::Internal::VirtualMachine* vm,
+                         RE::BSTSmartPointer<RE::BSScript::Object>& out);
+
+static bool CallOPSMethod(const char* methodName) {
+    auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
+    RE::BSTSmartPointer<RE::BSScript::Object> obj;
+    if (!GetOPSObject(vm, obj)) return false;
+
+    auto* args = RE::MakeFunctionArguments();
+    RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> cb;
+    vm->DispatchMethodCall(obj, methodName, args, cb);
+    SKSE::log::info("CallOPSMethod: dispatched OutfitPreviewSe.{}().", methodName);
+    return true;
 }
 
 static bool GetOPSObject(RE::BSScript::Internal::VirtualMachine* vm,
@@ -1449,28 +1541,34 @@ static bool SetOPSHotkey(int keyCode) {
     auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
     RE::BSTSmartPointer<RE::BSScript::Object> obj;
     if (!GetOPSObject(vm, obj)) return false;
-    if (auto* prop = obj->GetProperty("Hotkey")) {
-        const int oldKey = prop->GetSInt();
-        RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> cb;
+    // We park the hotkey on F18 (105 / 0x69) when disabled, to avoid triggering InitSettings' default-reset (which fires when Hotkey == 0).
+    const int wantKey = keyCode == 0 ? 105 : keyCode;
 
-        if (oldKey > 0 && oldKey != keyCode) {
-            auto* args = RE::MakeFunctionArguments(static_cast<std::int32_t>(oldKey));
-            vm->DispatchMethodCall(obj, "UnregisterForKey", args, cb);
-            SKSE::log::info("SetOPSHotkey: unregistered OutfitPreviewSe key {}.", oldKey);
-        }
+    auto* var = obj->GetVariable("::Hotkey_var");
+    const int oldKey = var ? var->GetSInt() : -1;
+    if (oldKey == wantKey) { return true; }  // already where we want it
 
-        prop->SetSInt(keyCode);
-        SKSE::log::info("SetOPSHotkey: set OutfitPreviewSe.Hotkey = {}.", keyCode);
-
-        if (keyCode > 0 && oldKey != keyCode) {
-            auto* args = RE::MakeFunctionArguments(static_cast<std::int32_t>(keyCode));
-            vm->DispatchMethodCall(obj, "RegisterForKey", args, cb);
-            SKSE::log::info("SetOPSHotkey: registered OutfitPreviewSe key {}.", keyCode);
-        }
-
-        return true;
+    RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> cb;
+    if (oldKey > 0) {
+        vm->DispatchMethodCall(obj, "UnregisterForKey", RE::MakeFunctionArguments(static_cast<std::int32_t>(oldKey)), cb);
     }
-    return false;
+    const int orig = g_OPSOriginalKey.load() > 0 ? g_OPSOriginalKey.load() : 79;
+    if (orig > 0 && orig != wantKey && orig != oldKey) {
+        vm->DispatchMethodCall(obj, "UnregisterForKey", RE::MakeFunctionArguments(static_cast<std::int32_t>(orig)), cb);
+    }
+    if (var) {
+        var->SetSInt(wantKey);
+    }
+    auto* prop = obj->GetProperty("Hotkey");
+    if (prop) {
+        prop->SetSInt(wantKey);
+    }
+    if (wantKey > 0) {
+        vm->DispatchMethodCall(obj, "RegisterForKey", RE::MakeFunctionArguments(static_cast<std::int32_t>(wantKey)), cb);
+    }
+    SKSE::log::info("SetOPSHotkey: OPS Hotkey {} -> {} ({}).", oldKey, wantKey,
+        keyCode == 0 ? "Numpad 1 freed to F18" : "alias key enabled");
+    return true;
 }
 
 static void LoadOPSConfig() {
@@ -1479,6 +1577,14 @@ static void LoadOPSConfig() {
     g_OPSConfig.toggleDIK = 0x4F;
     g_OPSConfig.toggleVK = VK_NUMPAD1;
     SKSE::log::info("LoadOPSConfig: enabled=true (Outfit Preview Selector detected).");
+}
+
+static void LoadModexConfig() {
+    g_ModexConfig.enabled = IsModexInstalled();
+    if (!g_ModexConfig.enabled) return;
+    g_ModexConfig.toggleDIK = 0xD3; // Delete
+    g_ModexConfig.toggleVK = VK_DELETE;
+    SKSE::log::info("LoadModexConfig: enabled=true (Modex detected).");
 }
 
 // Read Mod Function Menu's current [Controls.Keyboard] iHotkey (a DirectInput scancode) from its TOML.
@@ -1694,6 +1800,8 @@ static std::atomic<bool> g_UnblockMCM{ false };     // ON = user's key opens MCM
 static std::atomic<bool> g_UnblockQAR{ false };     // ON = user's key opens QAR; OFF = key freed, button still opens
 static std::atomic<bool> g_UnblockModFunctionMenu{ false }; // ON = user's key opens Mod Function Menu; OFF = key freed, button still opens
 static std::atomic<bool> g_UnblockOPS{ false };     // ON = user's key opens Outfit Preview Selector; OFF = key freed, button still opens
+static std::atomic<bool> g_UnblockModex{ false };   // ON = user's key opens Modex; OFF = key freed, button still opens
+static std::atomic<bool> g_UnblockHotkeyReminder{ false }; // ON = Risa bridges F11; native listener remains keyless
 static std::atomic<bool> g_UnblockCSEditor{ false };  // Community Shaders sub-toggles (rebindable in settings)
 static std::atomic<bool> g_UnblockCSOverlay{ false };
 static std::atomic<bool> g_UnblockCSEffect{ false };
@@ -1702,6 +1810,7 @@ static std::atomic<bool> g_UnblockPartySheet{ false };
 static std::atomic<bool> g_UnblockPartyInspect{ false };
 static std::atomic<bool> g_UnblockPartyCharacter{ false };
 static std::atomic<bool> g_PartySheetDirectDispatch{ false };
+static std::atomic<WORD> g_PartySheetDispatchModifierDIK{ 0 };
 
 // User-rebindable "alias" hotkey per mod: the key the launcher listens for to open that mod.
 // Defaults to the mod's ORIGINAL key; the mod's real key stays relocated, so changing this
@@ -1709,7 +1818,7 @@ static std::atomic<bool> g_PartySheetDirectDispatch{ false };
 // chordDown[] array in PollOriginalHotkeyAliases.
 // Indices 0..AI_Dragonborn are the chordDown[] watcher mods. AI_ReShade (raw-input bridge) and
 // AI_MF (own bridge below) are rebindable too but handled outside the chordDown loop.
-enum AliasIdx { AI_OAR = 0, AI_IED, AI_ENB, AI_DMenu, AI_IC, AI_FLICK, AI_DebugMenu, AI_KreatE, AI_CS, AI_CatMenu, AI_Dragonborn, AI_ReShade, AI_MF, AI_CSEditor, AI_CSOverlay, AI_CSEffect, AI_PartySettings, AI_PartySheet, AI_PartyInspect, AI_PartyCharacter, AI_SearchUI, AI_MCM, AI_QAR, AI_ModFunctionMenu, AI_OPS, AI_COUNT };
+enum AliasIdx { AI_OAR = 0, AI_IED, AI_ENB, AI_DMenu, AI_IC, AI_FLICK, AI_DebugMenu, AI_KreatE, AI_CS, AI_CatMenu, AI_Dragonborn, AI_ReShade, AI_MF, AI_CSEditor, AI_CSOverlay, AI_CSEffect, AI_PartySettings, AI_PartySheet, AI_PartyInspect, AI_PartyCharacter, AI_SearchUI, AI_MCM, AI_QAR, AI_ModFunctionMenu, AI_OPS, AI_Modex, AI_HotkeyReminder, AI_COUNT };
 static std::atomic<WORD> g_AliasDik[AI_COUNT];
 static std::atomic<bool> g_AliasCtrl[AI_COUNT];
 static std::atomic<bool> g_AliasShift[AI_COUNT];
@@ -1723,7 +1832,7 @@ static std::string g_ExclusionsDetailText = "";
 static int g_ExclusionStep = 0;
 static const char* const g_AliasIds[AI_COUNT] = {
     "OAR", "IED", "ENB", "dMenu", "ImprovedCamera", "FLICK", "DebugMenu", "KreatE", "CS", "CatMenu", "Dragonborn", "ReShade", "MF",
-    "CSEditor", "CSOverlay", "CSEffect", "PartySettings", "PartySheet", "PartyInspect", "PartyCharacter", "SearchUI", "MCM", "QAR", "ModFunctionMenu", "OPS"
+    "CSEditor", "CSOverlay", "CSEffect", "PartySettings", "PartySheet", "PartyInspect", "PartyCharacter", "SearchUI", "MCM", "QAR", "ModFunctionMenu", "OPS", "Modex", "HotkeyReminder"
 };
 static std::atomic<bool>* const g_AliasUnblock[AI_COUNT] = {
     &g_UnblockOAR, &g_UnblockIED, &g_UnblockENB, &g_UnblockDMenu, &g_UnblockImprovedCamera,
@@ -1731,7 +1840,7 @@ static std::atomic<bool>* const g_AliasUnblock[AI_COUNT] = {
     &g_UnblockDragonborn, &g_UnblockReShade, &g_UnblockMF,
     &g_UnblockCSEditor, &g_UnblockCSOverlay, &g_UnblockCSEffect,
     &g_UnblockPartySettings, &g_UnblockPartySheet, &g_UnblockPartyInspect, &g_UnblockPartyCharacter,
-    &g_UnblockSearchUI, &g_UnblockMCM, &g_UnblockQAR, &g_UnblockModFunctionMenu, &g_UnblockOPS
+    &g_UnblockSearchUI, &g_UnblockMCM, &g_UnblockQAR, &g_UnblockModFunctionMenu, &g_UnblockOPS, &g_UnblockModex, &g_UnblockHotkeyReminder
 };
 static std::atomic<int> g_CapturingAlias{ -1 }; // which alias row is in "press a key" capture (-1 = none)
 static std::atomic<long long> g_KeyCaptureStartedMs{ 0 }; // when the key capturing was started (for 3s timeout)
@@ -1798,6 +1907,8 @@ static void InitAliasDefaults() {
     set(AI_QAR, 0x00, false, false, false);            // none until the user picks one
     set(AI_ModFunctionMenu, 0x3B, false, false, false); // F1 (Mod Function Menu's own default)
     set(AI_OPS, 0x4F, false, false, false);            // Numpad 1 (Outfit Preview Selector's own default)
+    set(AI_Modex, 0xD3, false, false, false);          // Delete (Modex's own default)
+    set(AI_HotkeyReminder, 0x57, false, false, false); // F11 (Hotkey Reminder default)
 }
 
 static void RestoreAliasToDefault(int idx) {
@@ -1832,6 +1943,8 @@ static void RestoreAliasToDefault(int idx) {
         case AI_QAR: set(AI_QAR, 0x00, false, false, false); break;
         case AI_ModFunctionMenu: set(AI_ModFunctionMenu, 0x3B, false, false, false); break;
         case AI_OPS: set(AI_OPS, 0x4F, false, false, false); break;
+        case AI_Modex: set(AI_Modex, 0xD3, false, false, false); break;
+        case AI_HotkeyReminder: set(AI_HotkeyReminder, 0x57, false, false, false); break;
         default: break;
     }
 }
@@ -1866,7 +1979,7 @@ static std::vector<std::string> g_ButtonOrder = {
 // Every launcher button id that should exist in the order. On load we append any missing from a
 // user's saved order so newly added buttons (e.g. QAR) still show up for existing installs.
 static const std::vector<std::string> kAllButtonIds = {
-    "MF", "MCM", "SearchUI", "OAR", "IED", "DebugMenu", "dMenu", "ImprovedCamera", "ENB", "FLICK", "KreatE", "CS", "PartySheet", "CatMenu", "Dragonborn", "ReShade", "QAR", "ModFunctionMenu", "OPS"
+    "MF", "MCM", "SearchUI", "OAR", "IED", "DebugMenu", "dMenu", "ImprovedCamera", "ENB", "FLICK", "KreatE", "CS", "PartySheet", "CatMenu", "Dragonborn", "ReShade", "QAR", "ModFunctionMenu", "OPS", "Modex", "HotkeyReminder"
 };
 
 static void SaveButtonOrder() {
@@ -1913,7 +2026,9 @@ static void SaveButtonOrder() {
         outfile << "EnableOriginalMCM = " << (g_UnblockMCM.load() ? 1 : 0) << "\n";
         outfile << "EnableOriginalQAR = " << (g_UnblockQAR.load() ? 1 : 0) << "\n";
         outfile << "EnableOriginalModFunctionMenu = " << (g_UnblockModFunctionMenu.load() ? 1 : 0) << "\n";
-        outfile << "EnableOriginalOPS = 0\n";
+        outfile << "EnableOriginalOPS = " << (g_UnblockOPS.load() ? 1 : 0) << "\n";
+        outfile << "EnableOriginalModex = " << (g_UnblockModex.load() ? 1 : 0) << "\n";
+        outfile << "EnableOriginalHotkeyReminder = " << (g_UnblockHotkeyReminder.load() ? 1 : 0) << "\n";
         outfile << "EnableLogging = " << (g_LoggingEnabled.load() ? 1 : 0) << "\n";
         outfile << "EnableFileChangeLog = " << (g_FileChangeLogEnabled.load() ? 1 : 0) << "\n";
         outfile << "AllowOpenInConsole = " << (g_AllowOpenInConsole.load() ? 1 : 0) << "\n";
@@ -2052,7 +2167,11 @@ static void LoadButtonOrder() {
                 } else if (key == "ENABLEORIGINALMODFUNCTIONMENU") {
                     try { g_UnblockModFunctionMenu.store(std::stoi(val) != 0); } catch (...) {}
                 } else if (key == "ENABLEORIGINALOPS") {
-                    g_UnblockOPS.store(false);
+                    try { g_UnblockOPS.store(std::stoi(val) != 0); } catch (...) {}
+                } else if (key == "ENABLEORIGINALMODEX") {
+                    try { g_UnblockModex.store(std::stoi(val) != 0); } catch (...) {}
+                } else if (key == "ENABLEORIGINALHOTKEYREMINDER") {
+                    try { g_UnblockHotkeyReminder.store(std::stoi(val) != 0); } catch (...) {}
                 } else if (key == "ENABLELOGGING") {
                     try { g_LoggingEnabled.store(std::stoi(val) != 0); } catch (...) {}
                 } else if (key == "ENABLEFILECHANGELOG") {
@@ -2223,6 +2342,13 @@ static std::atomic<long long> g_LastModFunctionMenuIniAttemptMs{ 0 };
 static std::atomic<bool> g_OPSKeyManaged{ false };
 static std::atomic<long long> g_LastOPSKeyAttemptMs{ 0 };
 
+
+static std::atomic<bool> g_ModexKeyManaged{ false };
+static std::atomic<long long> g_LastModexKeyAttemptMs{ 0 };
+static std::atomic<int> g_ModexOriginalKey{ 211 }; // Delete
+static std::atomic<bool> g_ModexOriginalKeyCaptured{ false };
+static std::atomic<long long> g_LastHotkeyReminderSyncMs{ 0 };
+
 static std::atomic<bool> g_AllowDragonbornOpen{ false };
 static std::atomic<long long> g_AllowDragonbornOpenUntilMs{ 0 };
 static std::atomic<bool> g_AllowSearchUIOpen{ false };
@@ -2289,7 +2415,7 @@ static void OpenPartySettings();
 static void OpenPartySheet();
 static void OpenPartyInspect();
 static void OpenPartyCharacter();
-static bool DispatchPartySheetKey(WORD dik);
+static bool DispatchPartySheetKey(WORD dik, WORD modifierDIK = 0);
 static bool ShowPartyInspectForCrosshair();
 static void OpenCatMenu();
 static void OpenDragonbornToolkit();
@@ -2304,6 +2430,15 @@ static bool IsOPSInstalled();
 static void LoadOPSConfig();
 static void TryManageOPSHotkey(bool lateRetry = false);
 static bool SetOPSHotkey(int keyCode);
+
+static void OpenModex();
+static bool IsModexInstalled();
+static void LoadModexConfig();
+static void TryManageModexHotkey();
+static void OpenHotkeyReminder();
+static bool IsHotkeyReminderInstalled();
+static bool SetHotkeyReminderHotkeyEnabled(bool enabled);
+static void SyncHotkeyReminderHotkey(bool force = false);
 static bool SetOAROpen(bool open);
 static bool SetCatMenuOpen(bool open);
 static bool SetDragonbornOpen(bool open);
@@ -2719,7 +2854,7 @@ static void CloseActiveModMenu(ActiveMenu active) {
     } else if (active == ActiveMenu::PartySheet) {
         // Party Sheet consumes Escape internally for all four modal surfaces. Dispatch it only
         // to Party Sheet so closing from F1 cannot open Skyrim's pause menu.
-        DispatchPartySheetKey(kEscapeDIK);
+        DispatchPartySheetKey(kEscapeDIK, 0);
         g_ActivePartySheetSub.store(0);
         SKSE::log::info("CloseActiveModMenu: sent Escape directly to Skyrim Party Sheet.");
     } else if (active == ActiveMenu::CatMenu) {
@@ -2758,9 +2893,24 @@ static void CloseActiveModMenu(ActiveMenu active) {
         SKSE::log::info("CloseActiveModMenu: scheduled Mod Function Menu close with {} after handoff.",
             NameFromDIK(toggleDIK));
     } else if (active == ActiveMenu::OPS) {
-        // Close via the author's intended SKSE mod event (matches OPS_NativePreviewOpen).
-        SendOPSModEvent("OPS_NativePreviewClose");
-        SKSE::log::info("CloseActiveModMenu: closing Outfit Preview Selector via OPS_NativePreviewClose.");
+        SendOPSModEvent("OPS_CloseMenu");
+        SKSE::log::info("CloseActiveModMenu: closed Outfit Preview Selector via ModEvent OPS_CloseMenu.");
+    } else if (active == ActiveMenu::Modex) {
+        auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
+        if (vm && vm->TypeIsValid("Modex")) {
+            RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> cb;
+            vm->DispatchStaticCall("Modex", "CloseMenu", RE::MakeFunctionArguments(), cb);
+            SKSE::log::info("CloseActiveModMenu: closed Modex via Modex.CloseMenu().");
+        } else {
+            SKSE::log::info("CloseActiveModMenu: Modex not registered in VM; skipping CloseMenu call.");
+        }
+    } else if (active == ActiveMenu::HotkeyReminder) {
+        // Hotkey Reminder's Papyrus CloseMenu() only closes CustomMenu; it does NOT emit the
+        // Flash save event. Its SWF deliberately uses Tab as "Save & Exit" (Escape cancels).
+        // Route every Risa-owned close through Tab so F1 and our one-press Escape bridge both
+        // preserve edits exactly like the mod's native Save & Exit action.
+        SimulateModifiedKey(0, kTabDIK);
+        SKSE::log::info("CloseActiveModMenu: sent Tab to Hotkey Reminder (Save & Exit).");
     } else if (active == ActiveMenu::ReShade) {
         if (g_ReShadeAddonActive.load() && RisaReShade::RuntimeReady()) {
             // Keyless close through ReShade's own API.
@@ -3494,7 +3644,9 @@ static void HookedKbProcess(RE::BSWin32KeyboardDevice* self, float a_dt) {
                                            || escMenu == ActiveMenu::DMenu
                                            || escMenu == ActiveMenu::FLICK
                                            || escMenu == ActiveMenu::DebugMenu
-                                           || escMenu == ActiveMenu::SearchUI;
+                                           || escMenu == ActiveMenu::SearchUI
+                                           || escMenu == ActiveMenu::Modex
+                                           || escMenu == ActiveMenu::HotkeyReminder;
                 if (explicitClose) {
                     // Keep ESC stripped from the game for a moment after we close the menu, so the
                     // still-held ESC can't pop Skyrim's system menu once g_ActiveMenu clears to None.
@@ -3734,6 +3886,49 @@ static void PollOriginalHotkeyAliases(const BYTE* state) {
                physicalShift == g_AliasShift[i].load() &&
                physicalAlt == g_AliasAlt[i].load();
     };
+
+    // OPS's Papyrus key is placed under external control when Risa is present. Bridge the
+    // user's OPS alias here so Numpad 1 remains free while the alias can still be enabled.
+    if (g_OPSConfig.enabled && CheckAliasTrigger(AI_OPS,
+            g_UnblockOPS.load() && aliasDown(AI_OPS))) {
+        const auto active = g_ActiveMenu.load();
+        if (active == ActiveMenu::OPS ||
+            (active == ActiveMenu::None && !(g_LauncherWindow && g_LauncherWindow->IsOpen.load()) &&
+             !IsExternalMenuOpen() && NowMs() >= g_MenuOpenLockUntilMs.load())) {
+            SKSE::log::info("DirectInput: OPS alias edge on {}; opening/toggling through Papyrus API.",
+                NameFromDIK(g_AliasDik[AI_OPS].load()));
+            OpenOPS();
+        }
+    }
+
+    // Modex's hotkey is placed under external control when Risa is present. Bridge the
+    // user's Modex alias here so Delete remains free while the alias can still be enabled.
+    if (g_ModexConfig.enabled && CheckAliasTrigger(AI_Modex,
+            g_UnblockModex.load() && aliasDown(AI_Modex))) {
+        const auto active = g_ActiveMenu.load();
+        if (active == ActiveMenu::Modex ||
+            (active == ActiveMenu::None && !(g_LauncherWindow && g_LauncherWindow->IsOpen.load()) &&
+             !IsExternalMenuOpen() && NowMs() >= g_MenuOpenLockUntilMs.load())) {
+            SKSE::log::info("DirectInput: Modex alias edge on {}; opening/toggling through Papyrus API.",
+                NameFromDIK(g_AliasDik[AI_Modex].load()));
+            OpenModex();
+        }
+    }
+
+    // Hotkey Reminder's own listener stays unregistered while managed. If the user enables
+    // its original-key row, bridge the chosen alias through the public OpenMenu API instead.
+    if (IsHotkeyReminderInstalled() && !g_ExcludeMod[AI_HotkeyReminder].load() &&
+        CheckAliasTrigger(AI_HotkeyReminder,
+            g_UnblockHotkeyReminder.load() && aliasDown(AI_HotkeyReminder))) {
+        const auto active = g_ActiveMenu.load();
+        if (active == ActiveMenu::HotkeyReminder ||
+            (active == ActiveMenu::None && !(g_LauncherWindow && g_LauncherWindow->IsOpen.load()) &&
+             !IsExternalMenuOpen() && NowMs() >= g_MenuOpenLockUntilMs.load())) {
+            SKSE::log::info("DirectInput: Hotkey Reminder alias edge on {}; toggling through its API.",
+                NameFromDIK(g_AliasDik[AI_HotkeyReminder].load()));
+            OpenHotkeyReminder();
+        }
+    }
 
     // KreatE opens via a SendInput End-tap; if the physical End is still held when we send
     // it, no fresh key-down edge is produced and KreatE ignores it. So KreatE alone defers
@@ -4039,6 +4234,7 @@ static HRESULT STDMETHODCALLTYPE HookedGetDeviceState(IDirectInputDevice8A* pDev
             TryManageFLICKHotkey(true);
             TryManageOPSHotkey(true);
             TryManageDragonbornHotkey(true);
+            SyncHotkeyReminderHotkey();
             SyncDMenuKeyViaApi();  // keep dMenu's key freed (or restored) live via the v2 API
             SyncSearchUIKey();     // keep SearchUI's key freed (F18) or restored, live via the Papyrus VM
         }
@@ -4166,6 +4362,13 @@ static const GUID s_GUID_SysKeyboard   =
 // Hides polling-based menu chords only from the DLL that owns each menu.
 // ============================================================================
 
+static WORD PartySheetModifierVK(WORD dik) {
+    if (dik == 0x2A || dik == 0x36) return VK_SHIFT;
+    if (dik == 0x1D || dik == 0x9D) return VK_CONTROL;
+    if (dik == 0x38 || dik == 0xB8) return VK_MENU;
+    return dik != 0 ? VKFromDIK(dik) : 0;
+}
+
 static SHORT WINAPI HookedGetAsyncKeyState(int vKey) {
     const auto real = [&]() -> SHORT { return g_OrigGetAsyncKeyState ? g_OrigGetAsyncKeyState(vKey) : ::GetAsyncKeyState(vKey); };
     if (g_WaitingForHotkeyPress.load()) return real();
@@ -4175,23 +4378,19 @@ static SHORT WINAPI HookedGetAsyncKeyState(int vKey) {
     const bool isModifierKey = vKey == VK_CONTROL || vKey == VK_LCONTROL || vKey == VK_RCONTROL ||
         vKey == VK_SHIFT || vKey == VK_LSHIFT || vKey == VK_RSHIFT ||
         vKey == VK_MENU || vKey == VK_LMENU || vKey == VK_RMENU;
-    if (g_PartySheetDirectDispatch.load() && g_PartySheetConfig.modifierDIK != 0 &&
-        vKey == VKFromDIK(g_PartySheetConfig.modifierDIK) &&
-        IsCallerModule(_ReturnAddress(), "SkyrimPartySheet")) {
-        return static_cast<SHORT>(0x8000);
-    }
+    const WORD partyDispatchModifierDIK = g_PartySheetDispatchModifierDIK.load();
     // The user's alias chord (e.g. Shift+F) adds a physical modifier that is NOT part of Party
     // Sheet's own binding. Hide those extra modifiers from Party Sheet during the dispatch so it
     // reads the plain dispatched key instead of "Shift+X" and ignores it. Its own modifier (if any)
     // is force-pressed by the check above and preserved here.
     if (g_PartySheetDirectDispatch.load() && isModifierKey &&
         IsCallerModule(_ReturnAddress(), "SkyrimPartySheet")) {
-        const WORD ownMod = g_PartySheetConfig.modifierDIK != 0 ? VKFromDIK(g_PartySheetConfig.modifierDIK) : 0;
+        const WORD ownMod = PartySheetModifierVK(partyDispatchModifierDIK);
         const bool isOwn = ownMod != 0 && (vKey == ownMod ||
             (ownMod == VK_SHIFT   && (vKey == VK_LSHIFT   || vKey == VK_RSHIFT)) ||
             (ownMod == VK_CONTROL && (vKey == VK_LCONTROL || vKey == VK_RCONTROL)) ||
             (ownMod == VK_MENU    && (vKey == VK_LMENU    || vKey == VK_RMENU)));
-        if (!isOwn) return 0;
+        return isOwn ? static_cast<SHORT>(0x8000) : 0;
     }
     if (isModifierKey && NowMs() <= g_NeutralizeCSModifiersUntilMs.load() &&
         IsCallerModule(_ReturnAddress(), "CommunityShaders")) {
@@ -4268,23 +4467,19 @@ static SHORT WINAPI HookedGetKeyState(int vKey) {
     const bool isModifierKey = vKey == VK_CONTROL || vKey == VK_LCONTROL || vKey == VK_RCONTROL ||
         vKey == VK_SHIFT || vKey == VK_LSHIFT || vKey == VK_RSHIFT ||
         vKey == VK_MENU || vKey == VK_LMENU || vKey == VK_RMENU;
-    if (g_PartySheetDirectDispatch.load() && g_PartySheetConfig.modifierDIK != 0 &&
-        vKey == VKFromDIK(g_PartySheetConfig.modifierDIK) &&
-        IsCallerModule(_ReturnAddress(), "SkyrimPartySheet")) {
-        return static_cast<SHORT>(0x8000);
-    }
+    const WORD partyDispatchModifierDIK = g_PartySheetDispatchModifierDIK.load();
     // The user's alias chord (e.g. Shift+F) adds a physical modifier that is NOT part of Party
     // Sheet's own binding. Hide those extra modifiers from Party Sheet during the dispatch so it
     // reads the plain dispatched key instead of "Shift+X" and ignores it. Its own modifier (if any)
     // is force-pressed by the check above and preserved here.
     if (g_PartySheetDirectDispatch.load() && isModifierKey &&
         IsCallerModule(_ReturnAddress(), "SkyrimPartySheet")) {
-        const WORD ownMod = g_PartySheetConfig.modifierDIK != 0 ? VKFromDIK(g_PartySheetConfig.modifierDIK) : 0;
+        const WORD ownMod = PartySheetModifierVK(partyDispatchModifierDIK);
         const bool isOwn = ownMod != 0 && (vKey == ownMod ||
             (ownMod == VK_SHIFT   && (vKey == VK_LSHIFT   || vKey == VK_RSHIFT)) ||
             (ownMod == VK_CONTROL && (vKey == VK_LCONTROL || vKey == VK_RCONTROL)) ||
             (ownMod == VK_MENU    && (vKey == VK_LMENU    || vKey == VK_RMENU)));
-        if (!isOwn) return 0;
+        return isOwn ? static_cast<SHORT>(0x8000) : 0;
     }
     if (isModifierKey && NowMs() <= g_NeutralizeCSModifiersUntilMs.load() &&
         IsCallerModule(_ReturnAddress(), "CommunityShaders")) {
@@ -4684,7 +4879,7 @@ static bool DispatchKeyToCSSink(WORD dik) {
     return true;
 }
 
-static bool DispatchPartySheetKey(WORD dik) {
+static bool DispatchPartySheetKey(WORD dik, WORD modifierDIK) {
     if (!g_PartySheetConfig.enabled || dik == 0) return false;
 
     const size_t count = g_SinkEntryCount.load(std::memory_order_acquire);
@@ -4694,21 +4889,16 @@ static bool DispatchPartySheetKey(WORD dik) {
 
         auto* manager = RE::BSInputDeviceManager::GetSingleton();
         auto* source = manager ? static_cast<RE::BSTEventSource<RE::InputEvent*>*>(manager) : nullptr;
-        const WORD modifier = g_PartySheetConfig.modifierDIK;
+        const WORD modifier = modifierDIK;
         const auto send = [&](float value, float heldSecs) -> bool {
             auto* key = RE::ButtonEvent::Create(RE::INPUT_DEVICE::kKeyboard, RE::BSFixedString(), dik, value, heldSecs);
             if (!key) return false;
-            RE::ButtonEvent* mod = nullptr;
-            if (modifier != 0 && dik != kEscapeDIK) {
-                mod = RE::ButtonEvent::Create(RE::INPUT_DEVICE::kKeyboard, RE::BSFixedString(), modifier, value, heldSecs);
-                if (!mod) {
-                    key->~ButtonEvent();
-                    RE::free(key);
-                    return false;
-                }
-                mod->next = key;
-            }
-            RE::InputEvent* head = mod ? static_cast<RE::InputEvent*>(mod) : key;
+            // Party Sheet's InputHandler examines ONLY the first event in the list. Do not put a
+            // synthetic modifier event before the action key or it sees Shift/Ctrl/Alt and returns
+            // without ever reaching X/F6/Y/U. ModifierMatches() reads GetAsyncKeyState instead;
+            // g_PartySheetDirectDispatch supplies the requested modifier through that exact path.
+            RE::InputEvent* head = key;
+            g_PartySheetDispatchModifierDIK.store(modifier);
             g_PartySheetDirectDispatch.store(true);
             // Hide the user's physically-held modifiers from Party Sheet for this callback. The alias
             // that triggered us may be a modifier chord (e.g. Shift+F), but Party Sheet reads the
@@ -4724,6 +4914,10 @@ static bool DispatchPartySheetKey(WORD dik) {
                     kb->curState[kMods[m]] = 0;
                     kb->prevState[kMods[m]] = 0;
                 }
+                if (modifier != 0 && modifier < 256) {
+                    kb->curState[modifier] = 0x80;
+                    kb->prevState[modifier] = 0x80;
+                }
             }
             entry.orig(entry.sink, &head, source);
             if (kb) {
@@ -4733,17 +4927,15 @@ static bool DispatchPartySheetKey(WORD dik) {
                 }
             }
             g_PartySheetDirectDispatch.store(false);
-            if (mod) {
-                mod->~ButtonEvent();
-                RE::free(mod);
-            }
+            g_PartySheetDispatchModifierDIK.store(0);
             key->~ButtonEvent();
             RE::free(key);
             return true;
         };
         if (!send(1.0f, 0.0f)) return false;
         send(0.0f, 0.12f);
-        SKSE::log::info("DispatchPartySheetKey: dispatched {} directly to Skyrim Party Sheet.", NameFromDIK(dik));
+        SKSE::log::info("DispatchPartySheetKey: dispatched {} directly to Skyrim Party Sheet.",
+            FormatModifiedHotkey(dik, modifier));
         return true;
     }
     SKSE::log::warn("DispatchPartySheetKey: Skyrim Party Sheet input sink is not available yet.");
@@ -5567,7 +5759,7 @@ static void OpenENB() {
     g_ENBOpenRequestedMs.store(NowMs());
     g_MenuOpenLockUntilMs.store(NowMs() + 1800); // ENB editor takes time to load; ignore F1 until then
     g_LastLauncherToggleMs.store(NowMs());
-    
+
 
     std::thread([]() {
         std::this_thread::sleep_for(std::chrono::milliseconds(350));
@@ -5672,7 +5864,10 @@ static void OpenQAR() {
     CloseLauncher();
     g_LastLauncherToggleMs.store(NowMs());
     auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
-    if (!vm) { SKSE::log::warn("OpenQAR: no Papyrus VM."); return; }
+    if (!vm || !vm->TypeIsValid("QuickArmorRebalance")) {
+        SKSE::log::warn("OpenQAR: QuickArmorRebalance type is not registered in the Papyrus VM.");
+        return;
+    }
     auto* args = RE::MakeFunctionArguments();
     RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> cb;
     vm->DispatchStaticCall("QuickArmorRebalance", "Open", args, cb);
@@ -5749,12 +5944,15 @@ static void OpenOPS() {
 
     CloseLauncher();
     g_LastLauncherToggleMs.store(NowMs());
-    // Open via the author's intended SKSE mod event (no VM method call, no Papyrus reach-in). OPS's own
-    // plugin handles the open + camera correctly on its side.
-    SendOPSModEvent("OPS_NativePreviewOpen");
+    // Call the script's public function directly. The NativePreview event names are notifications
+    // emitted by OPS itself, not command handlers registered by its Papyrus script.
+    if (!CallOPSMethod("OpenSelector")) {
+        SKSE::log::warn("OpenOPS: OutfitPreviewSe script is not bound yet; open request was not sent.");
+        return;
+    }
     g_ActiveMenu.store(ActiveMenu::OPS);
     g_MenuOpenLockUntilMs.store(NowMs() + 500);
-    SKSE::log::info("OpenOPS: sent OPS_NativePreviewOpen.");
+    SKSE::log::info("OpenOPS: dispatched OutfitPreviewSe.OpenSelector().");
 }
 
 static void OpenDebugMenu() {
@@ -6223,7 +6421,7 @@ static bool ShowPartyInspectForCrosshair() {
     return true;
 }
 
-static void OpenPartySheetAction(int action, WORD dik, const char* name, bool waitForCrosshair = false) {
+static void OpenPartySheetAction(int action, WORD dik, WORD modifierDIK, const char* name, bool waitForCrosshair = false) {
     if (!g_PartySheetConfig.enabled) {
         SKSE::log::warn("OpenPartySheetAction: Skyrim Party Sheet is not available.");
         return;
@@ -6236,48 +6434,50 @@ static void OpenPartySheetAction(int action, WORD dik, const char* name, bool wa
         const auto request = g_PartyInspectRequest.fetch_add(1) + 1;
         g_ActiveMenu.store(ActiveMenu::PartySheet);
         g_ActivePartySheetSub.store(action);
-        std::thread([request, action, dik, name]() {
+        std::thread([request, action, dik, modifierDIK, name]() {
             std::this_thread::sleep_for(std::chrono::milliseconds(125));
             auto* tasks = SKSE::GetTaskInterface();
             if (!tasks) {
                 if (g_PartyInspectRequest.load() == request) g_ActiveMenu.store(ActiveMenu::None);
                 return;
             }
-            tasks->AddTask([request, action, dik, name]() {
+            tasks->AddTask([request, action, dik, modifierDIK, name]() {
                 if (g_PartyInspectRequest.load() != request ||
                     g_ActiveMenu.load() != ActiveMenu::PartySheet ||
                     g_ActivePartySheetSub.load() != action) return;
-                if (ShowPartyInspectForCrosshair() || DispatchPartySheetKey(dik)) {
-                    SKSE::log::info("OpenPartySheetAction: opened {} keylessly after restoring the crosshair target.", name);
+                if (ShowPartyInspectForCrosshair()) {
+                    SKSE::log::info("OpenPartySheetAction: opened {} directly after restoring the crosshair target.", name);
                 } else {
-                    g_ActiveMenu.store(ActiveMenu::None);
-                    SKSE::log::error("OpenPartySheetAction: delayed {} dispatch failed.", name);
+                    const bool sent = DispatchPartySheetKey(dik, modifierDIK);
+                    SKSE::log::info("OpenPartySheetAction: {} {} directly to Party Sheet's InputHandler.",
+                        sent ? "dispatched" : "FAILED to dispatch", FormatModifiedHotkey(dik, modifierDIK));
                 }
             });
         }).detach();
         return;
     }
-    if (DispatchPartySheetKey(dik)) {
-        g_ActiveMenu.store(ActiveMenu::PartySheet);
-        g_ActivePartySheetSub.store(action);
-        SKSE::log::info("OpenPartySheetAction: opened {} keylessly.", name);
-    } else {
+    g_ActiveMenu.store(ActiveMenu::PartySheet);
+    g_ActivePartySheetSub.store(action);
+    const bool sent = DispatchPartySheetKey(dik, modifierDIK);
+    if (!sent) {
         g_ActiveMenu.store(ActiveMenu::None);
-        SKSE::log::error("OpenPartySheetAction: could not dispatch {} because the mod input sink was unavailable.", name);
+        g_ActivePartySheetSub.store(0);
     }
+    SKSE::log::info("OpenPartySheetAction: {} {} directly to Party Sheet's InputHandler for {}.",
+        sent ? "dispatched" : "FAILED to dispatch", FormatModifiedHotkey(dik, modifierDIK), name);
 }
 
 static void OpenPartySettings() {
-    OpenPartySheetAction(0, g_PartySheetConfig.settingsDIK, "Settings");
+    OpenPartySheetAction(0, g_PartySheetConfig.settingsDIK, g_PartySheetConfig.settingsModifierDIK, "Settings");
 }
 static void OpenPartySheet() {
-    OpenPartySheetAction(1, g_PartySheetConfig.partyDIK, "Party Sheet");
+    OpenPartySheetAction(1, g_PartySheetConfig.partyDIK, g_PartySheetConfig.partyModifierDIK, "Party Sheet");
 }
 static void OpenPartyInspect() {
-    OpenPartySheetAction(2, g_PartySheetConfig.inspectDIK, "Inspect Card", true);
+    OpenPartySheetAction(2, g_PartySheetConfig.inspectDIK, g_PartySheetConfig.inspectModifierDIK, "Inspect Card", true);
 }
 static void OpenPartyCharacter() {
-    OpenPartySheetAction(3, g_PartySheetConfig.characterDIK, "Character Sheet");
+    OpenPartySheetAction(3, g_PartySheetConfig.characterDIK, g_PartySheetConfig.characterModifierDIK, "Character Sheet");
 }
 
 static void OpenCatMenu() {
@@ -6504,6 +6704,7 @@ static bool HandleLauncherHotkeys(RE::InputEvent* ev, const char* source) {
             TryManageFLICKHotkey(true);
             TryManageOPSHotkey(true);
             TryManageDragonbornHotkey(true);
+            SyncHotkeyReminderHotkey();
             SyncDMenuKeyViaApi();
             SyncSearchUIKey();  // mirror here too so it fires under ReShade (DI poll is dead there)
         }
@@ -6713,10 +6914,10 @@ static void LogStartupDiagnostics() {
         g_UnblockCSOverlay.load() ? "enabled" : "disabled", FormatHotkey(g_CSConfig.effectDIK),
         g_UnblockCSEffect.load() ? "enabled" : "disabled");
     SKSE::log::info("Skyrim Party Sheet: detected={}, keyless sink=true, settings={} (alias={}), party={} (alias={}), inspect={} (alias={}), character={} (alias={})",
-        g_PartySheetConfig.enabled, FormatHotkey(g_PartySheetConfig.settingsDIK),
-        g_UnblockPartySettings.load() ? "enabled" : "disabled", FormatHotkey(g_PartySheetConfig.partyDIK),
-        g_UnblockPartySheet.load() ? "enabled" : "disabled", FormatHotkey(g_PartySheetConfig.inspectDIK),
-        g_UnblockPartyInspect.load() ? "enabled" : "disabled", FormatHotkey(g_PartySheetConfig.characterDIK),
+        g_PartySheetConfig.enabled, FormatModifiedHotkey(g_PartySheetConfig.settingsDIK, g_PartySheetConfig.settingsModifierDIK),
+        g_UnblockPartySettings.load() ? "enabled" : "disabled", FormatModifiedHotkey(g_PartySheetConfig.partyDIK, g_PartySheetConfig.partyModifierDIK),
+        g_UnblockPartySheet.load() ? "enabled" : "disabled", FormatModifiedHotkey(g_PartySheetConfig.inspectDIK, g_PartySheetConfig.inspectModifierDIK),
+        g_UnblockPartyInspect.load() ? "enabled" : "disabled", FormatModifiedHotkey(g_PartySheetConfig.characterDIK, g_PartySheetConfig.characterModifierDIK),
         g_UnblockPartyCharacter.load() ? "enabled" : "disabled");
     SKSE::log::info("CatMenu: detected={}, native listener={}, original F6={}, JSON managed={}",
         g_CatMenuConfig.enabled, g_CatMenuKeyHookInstalled.load() ? "disabled (keyless)" : "NOT DISABLED",
@@ -6839,11 +7040,11 @@ static void DrawExclusionsModals() {
 
             ImGuiMCP::Separator();
 
-            if (ButtonFit(Tr("button.return_user_defaults", "Return to User Defaults"), ImGuiMCP::ImVec2(-1.0f, 0.0f), uiScale)) {
+            if (ButtonFit(Tr("button.return_user_defaults", "Restore User Original Settings"), ImGuiMCP::ImVec2(-1.0f, 0.0f), uiScale)) {
                 CommitExclusions(true); // Restores user-original captured values
                 g_ExclusionStep = 2;   // Proceed to Exit Game option
             }
-            if (ButtonFit(Tr("button.return_mod_defaults", "Return to Mod Defaults"), ImGuiMCP::ImVec2(-1.0f, 0.0f), uiScale)) {
+            if (ButtonFit(Tr("button.return_mod_defaults", "Restore Original Mod Defaults"), ImGuiMCP::ImVec2(-1.0f, 0.0f), uiScale)) {
                 CommitExclusions(false); // Restores mod author defaults
                 g_ExclusionStep = 2;    // Proceed to Exit Game option
             }
@@ -7450,6 +7651,12 @@ static void __stdcall RenderLauncher() {
         LoadOPSConfig();
     }
 
+    const bool hasModex = g_ModexConfig.enabled || IsModexInstalled();
+    if (hasModex && !g_ModexConfig.enabled) {
+        LoadModexConfig();
+    }
+    const bool hasHotkeyReminder = IsHotkeyReminderInstalled();
+
     struct LauncherButton {
         std::string id;
         std::string icon;
@@ -7478,6 +7685,8 @@ static void __stdcall RenderLauncher() {
     allButtons.push_back({ "QAR", FontAwesome::UnicodeToUtf8(0xf553), Tr("mod.quick_armor_rebalance", "Quick Armor Rebalance"), OpenQAR, hasQAR });
     allButtons.push_back({ "ModFunctionMenu", FontAwesome::UnicodeToUtf8(0xf0ae), Tr("mod.mod_function_menu", "Mod Function Menu"), OpenModFunctionMenu, hasModFunctionMenu });
     allButtons.push_back({ "OPS", FontAwesome::UnicodeToUtf8(0xf508), Tr("mod.outfit_preview_selector", "Outfit Preview Selector"), OpenOPS, hasOPS });
+    allButtons.push_back({ "Modex", FontAwesome::UnicodeToUtf8(0xf07c), Tr("mod.modex", "Modex"), OpenModex, hasModex });
+    allButtons.push_back({ "HotkeyReminder", FontAwesome::UnicodeToUtf8(0xf11c), Tr("mod.hotkey_reminder", "Hotkey Reminder"), OpenHotkeyReminder, hasHotkeyReminder });
 
     // Filter to active buttons sorted by g_ButtonOrder
     std::vector<LauncherButton> buttons;
@@ -8284,6 +8493,8 @@ static void __stdcall RenderLauncher() {
             // OPS: key freed by disabling its MCM Hotkey property (opened via mod event). Excluded = left alone.
             const std::string opsTooltip = MakeTooltip("Numpad 1",
                 "Numpad 1 (kept - opens from the launcher too; its key doesn't clash)");
+            const std::string modexTooltip = MakeTooltip("DELETE", apiKey(AI_Modex, g_ModexConfig.toggleDIK));
+            const std::string hotkeyReminderTooltip = MakeTooltip("F11", apiKey(AI_HotkeyReminder, 0x57));
 
             std::string enbHotkey;
             if (g_ENBConfig.combinationVK != 0) {
@@ -8312,10 +8523,10 @@ static void __stdcall RenderLauncher() {
             const std::string csEditorTip = MakeTooltip("SHIFT + END", movedKey(AI_CSEditor, g_CSConfig.editorDIK));
             const std::string csOverlayTip = MakeTooltip("F10", movedKey(AI_CSOverlay, g_CSConfig.overlayDIK));
             const std::string csEffectTip = MakeTooltip("NUMPAD *", movedKey(AI_CSEffect, g_CSConfig.effectDIK));
-            const std::string partySettingsTip = MakeTooltip("X", FormatHotkey(g_PartySheetConfig.settingsDIK));
-            const std::string partySheetTip = MakeTooltip("F6", FormatHotkey(g_PartySheetConfig.partyDIK));
-            const std::string partyInspectTip = MakeTooltip("Y", FormatHotkey(g_PartySheetConfig.inspectDIK));
-            const std::string partyCharacterTip = MakeTooltip("U", FormatHotkey(g_PartySheetConfig.characterDIK));
+            const std::string partySettingsTip = MakeTooltip("X", FormatModifiedHotkey(g_PartySheetConfig.settingsDIK, g_PartySheetConfig.settingsModifierDIK));
+            const std::string partySheetTip = MakeTooltip("F6", FormatModifiedHotkey(g_PartySheetConfig.partyDIK, g_PartySheetConfig.partyModifierDIK));
+            const std::string partyInspectTip = MakeTooltip("Y", FormatModifiedHotkey(g_PartySheetConfig.inspectDIK, g_PartySheetConfig.inspectModifierDIK));
+            const std::string partyCharacterTip = MakeTooltip("U", FormatModifiedHotkey(g_PartySheetConfig.characterDIK, g_PartySheetConfig.characterModifierDIK));
             static bool s_csExpanded = false; // Community Shaders sub-key rows expanded?
             static bool s_partySheetExpanded = false;
 
@@ -8339,7 +8550,7 @@ static void __stdcall RenderLauncher() {
             const std::string& dragonbornOriginalTooltip = dragonbornTooltip;
             const std::string& dragonbornDisabledReason = launcherClashReason;
 
-            const bool anyMenusTools = hasMF || hasDMenu || hasFLICK || hasCatMenu || hasDragonborn || hasDebugMenu || hasSearchUI || hasMCM || hasModFunctionMenu;
+            const bool anyMenusTools = hasMF || hasDMenu || hasFLICK || hasCatMenu || hasDragonborn || hasDebugMenu || hasSearchUI || hasMCM || hasModFunctionMenu || hasModex || hasHotkeyReminder;
             const bool anyAnimGear   = hasOAR || hasIED || hasPartySheet || hasQAR || hasOPS;
             const bool anyGraphics   = hasENB || hasCS || hasImprovedCamera || hasReShade || hasKreatE;
 
@@ -8379,6 +8590,12 @@ static void __stdcall RenderLauncher() {
                 });
                 DrawOriginalHotkeyRow("ModFunctionMenu", Tr("mod.mod_function_menu", "Mod Function Menu"), "F1", mfmTooltip, "", AI_ModFunctionMenu, g_UnblockModFunctionMenu, hasModFunctionMenu, true, nullptr, false, []() {
                     OpenModFunctionMenu("alias");
+                });
+                DrawOriginalHotkeyRow("Modex", Tr("mod.modex", "Modex"), "Delete", modexTooltip, "", AI_Modex, g_UnblockModex, hasModex, true, nullptr, false, []() {
+                    OpenModex();
+                });
+                DrawOriginalHotkeyRow("HotkeyReminderSettings", Tr("mod.hotkey_reminder", "Hotkey Reminder"), "F11", hotkeyReminderTooltip, "", AI_HotkeyReminder, g_UnblockHotkeyReminder, hasHotkeyReminder, true, nullptr, false, []() {
+                    OpenHotkeyReminder();
                 });
             }
             EndCategory();
@@ -8513,7 +8730,7 @@ static void __stdcall RenderLauncher() {
                     ImGuiMCP::TextColored(ImGuiMCP::ImVec4(0.40f, 1.00f, 0.55f, 1.0f),
                         s_forceModDefaults ? Tr("restore.defaults_done", "All supported mod settings restored to their defaults.")
                                            : Tr("restore.originals_done", "All mod settings restored to their captured originals."));
-                    ImGuiMCP::Text("%s", Tr("restore.backup_removed", "The completed originals backup was removed so a future install starts fresh."));
+                    ImGuiMCP::Text("%s", Tr("restore.backup_removed", "The originals backup was archived as completed so a future install starts fresh."));
                     ImGuiMCP::Text("%s", Tr("restore.quit_then_disable", "Quit Skyrim, then disable this mod before the next launch."));
                     if (!s_exitDismissed) {
                         ImGuiMCP::Spacing();
@@ -8550,14 +8767,14 @@ static void __stdcall RenderLauncher() {
                         ImGuiMCP::TextColored(ImGuiMCP::ImVec4(1.00f, 0.35f, 0.35f, 1.0f),
                             "%s", Tr("restore.incomplete", "Restore was incomplete. The originals backup was kept; check the logs and retry."));
                     }
-                    if (ButtonFit(Tr("restore.my_original_settings", "Restore My Original Settings"), launcherButtonSize, uiScale)) {
+                    if (ButtonFit(Tr("restore.my_original_settings", "Restore User Original Settings"), launcherButtonSize, uiScale)) {
                         s_forceModDefaults = false;
                         s_confirmRestore = true;
                         s_scrollToBottomFrames = 3;
                     }
                     ImGuiMCP::SetItemTooltip("%s", Tr("tooltip.restore_originals", "Restore the values captured before Risa changed them.\nMissing captured values use safe supported-mod defaults."));
                     ImGuiMCP::SameLine(0.0f, 8.0f * layoutScale);
-                    if (ButtonFit(Tr("restore.supported_mod_defaults", "Restore Supported Mod Defaults"), launcherButtonSize, uiScale)) {
+                    if (ButtonFit(Tr("restore.supported_mod_defaults", "Restore Original Mod Defaults"), launcherButtonSize, uiScale)) {
                         s_forceModDefaults = true;
                         s_confirmRestore = true;
                         s_scrollToBottomFrames = 3;
@@ -9143,28 +9360,290 @@ static void StartFLICKHotkeyMonitor() {
     SKSE::log::info("StartFLICKHotkeyMonitor: periodic API reassertion started.");
 }
 
+#ifdef GetObject
+#undef GetObject
+#endif
+
+using Call_t = RE::BSScript::IFunction::CallResult(
+    RE::BSScript::IFunction* a_this,
+    const RE::BSTSmartPointer<RE::BSScript::Stack>& a_stack,
+    RE::BSScript::ErrorLogger* a_logger,
+    RE::BSScript::Internal::VirtualMachine* a_vm,
+    bool a_arg4);
+static Call_t* g_OrigCall = nullptr;
+
+static RE::BSScript::IFunction::CallResult HookedCall(
+    RE::BSScript::IFunction* a_this,
+    const RE::BSTSmartPointer<RE::BSScript::Stack>& a_stack,
+    RE::BSScript::ErrorLogger* a_logger,
+    RE::BSScript::Internal::VirtualMachine* a_vm,
+    bool a_arg4)
+{
+    if (a_this && a_stack && !g_UnblockOPS.load()) {
+        auto name = a_this->GetName();
+        if (name == "RegisterForKey" || name == "UnregisterForKey") {
+            auto* frame = a_stack->top;
+            if (frame) {
+                auto* selfVal = &frame->self;
+                if (selfVal && selfVal->IsObject()) {
+                    auto selfObj = selfVal->GetObject();
+                    if (selfObj) {
+                        auto* typeInfo = selfObj->GetTypeInfo();
+                        if (typeInfo) {
+                            std::string_view className = typeInfo->GetName();
+                            if (className == "OutfitPreviewSe") {
+                                auto page = a_stack->GetPageForFrame(frame);
+                                RE::BSScript::Variable& var = a_stack->GetStackFrameVariable(frame, 0, page);
+                                if (var.IsInt()) {
+                                    int val = var.GetSInt();
+                                    if (val != 105) {
+                                        var.SetSInt(105); // force F18 (105)
+                                        SKSE::log::info("HookedCall: forced OutfitPreviewSe::{} to F18 (105) [was {}].", name.c_str(), val);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return g_OrigCall(a_this, a_stack, a_logger, a_vm, a_arg4);
+}
+
+static bool s_PapyrusKeyHooked = false;
+static void HookPapyrusKeyFunctions() {
+    if (s_PapyrusKeyHooked) return;
+    auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
+    if (!vm) return;
+    RE::BSTSmartPointer<RE::BSScript::ObjectTypeInfo> typeInfo;
+    if (vm->GetScriptObjectType1("Form", typeInfo) && typeInfo) {
+        for (std::uint32_t i = 0; i < typeInfo->GetNumMemberFuncs(); ++i) {
+            auto& memberFunc = typeInfo->GetMemberFuncIter()[i];
+            if (memberFunc.func) {
+                auto name = memberFunc.func->GetName();
+                if (name == "RegisterForKey") {
+                    std::uintptr_t* vtable = *reinterpret_cast<std::uintptr_t**>(memberFunc.func.get());
+                    std::uintptr_t origCallAddr = vtable[15]; // index 15 = Call
+                    if (origCallAddr && origCallAddr != reinterpret_cast<std::uintptr_t>(HookedCall)) {
+                        g_OrigCall = reinterpret_cast<Call_t*>(origCallAddr);
+                        MH_STATUS status = MH_CreateHook(
+                            reinterpret_cast<void*>(origCallAddr),
+                            reinterpret_cast<void*>(HookedCall),
+                            reinterpret_cast<void**>(&g_OrigCall));
+                        if (status == MH_OK) {
+                            MH_EnableHook(reinterpret_cast<void*>(origCallAddr));
+                            SKSE::log::info("HookPapyrusKeyFunctions: detoured native Form::RegisterForKey / UnregisterForKey (vtable Call).");
+                            s_PapyrusKeyHooked = true;
+                            break;
+                        } else {
+                            SKSE::log::error("HookPapyrusKeyFunctions: failed to create hook: {}.", (int)status);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 static void TryManageOPSHotkey(bool lateRetry) {
-    // We no longer FREE OPS's key: rewriting its live Papyrus key registration froze input and fought
-    // the user's own rebinds. OPS's default key (Numpad 1) doesn't clash with the launcher, so we leave
-    // it alone and just provide the launcher button. But an earlier build forced Hotkey=0 into existing
-    // saves, killing the key - so if we find it disabled, restore Numpad 1 once. Otherwise never touch it.
-    if (g_OPSKeyManaged.load() || !IsOPSInstalled()) return;
+    if (!IsOPSInstalled()) return;
+
+    HookPapyrusKeyFunctions();
+
+    bool loaded = IsGameLoaded();
+    static bool wasLoaded = false;
+    if (loaded && !wasLoaded) {
+        g_OPSOriginalKeyCaptured.store(false);
+        g_OPSKeyManaged.store(false);
+        g_OPSFirstApply.store(true);
+        SKSE::log::info("TryManageOPSHotkey: save game load detected; resetting management flags.");
+    }
+    wasLoaded = loaded;
+
+    if (!loaded) return;
+
     const long long now = NowMs();
     if (lateRetry) {
         const long long last = g_LastOPSKeyAttemptMs.exchange(now);
         if (now - last < 2000) return;
     }
-    auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
-    RE::BSTSmartPointer<RE::BSScript::Object> obj;
-    if (!GetOPSObject(vm, obj)) return; // quest not bound yet - retry later
-    auto* prop = obj->GetProperty("Hotkey");
-    if (prop && prop->GetSInt() == 0) {
-        SetOPSHotkey(79); // Numpad 1 - undo the earlier build's disable
-        SKSE::log::info("TryManageOPSHotkey: restored Outfit Preview Selector hotkey to Numpad 1 (an earlier build had disabled it).");
+    auto* task = SKSE::GetTaskInterface();
+    if (!task) return;
+    // GetOPSObject / SetOPSHotkey touch the Papyrus VM, which is only safe on the main game thread.
+    // This is often called from the input-poll thread (where the VM silently no-ops), so do the work
+    // as a task. That's why the block never took effect before - it ran on the wrong thread.
+    task->AddTask([]() {
+        auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
+        RE::BSTSmartPointer<RE::BSScript::Object> obj;
+        if (!GetOPSObject(vm, obj)) return; // quest not bound yet - a later tick retries
+        g_OPSConfig.enabled = true;
+        auto* var = obj->GetVariable("::Hotkey_var");
+
+        if (!var) return;
+        const int current = var->GetSInt();
+        if (!g_OPSOriginalKeyCaptured.exchange(true)) {
+            if (current > 0 && current != 105) {
+                g_OPSOriginalKey.store(current);
+            } else {
+                g_OPSOriginalKey.store(79); // fallback to default OPS hotkey (Numpad 1)
+            }
+            SKSE::log::info("TryManageOPSHotkey: captured OPS original key {}.", g_OPSOriginalKey.load());
+        }
+        const int orig = g_OPSOriginalKey.load() > 0 ? g_OPSOriginalKey.load() : 79;
+        RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> cb;
+        const int want = g_UnblockOPS.load() ? orig : 105; // 105 = F18 (kSearchUIFreeKey)
+        const bool forceUnregister = g_OPSFirstApply.exchange(false);
+        if (current != want || forceUnregister) {
+            if (current != want) {
+                var->SetSInt(want);
+                auto* prop = obj->GetProperty("Hotkey");
+                if (prop) {
+                    prop->SetSInt(want);
+                }
+            }
+            // Always unregister the *known original key* (orig), not just current.
+            if (orig > 0 && orig != want) {
+                vm->DispatchMethodCall(obj, "UnregisterForKey",
+                    RE::MakeFunctionArguments(static_cast<std::int32_t>(orig)), cb);
+            }
+            if (current > 0 && current != orig && current != want) {
+                vm->DispatchMethodCall(obj, "UnregisterForKey",
+                    RE::MakeFunctionArguments(static_cast<std::int32_t>(current)), cb);
+            }
+            if (want > 0) {
+                vm->DispatchMethodCall(obj, "RegisterForKey",
+                    RE::MakeFunctionArguments(static_cast<std::int32_t>(want)), cb);
+            }
+            SKSE::log::info("TryManageOPSHotkey: updated Hotkey {} -> {} (unblock={}, also unregistered orig={}).",
+                current, want, g_UnblockOPS.load(), orig);
+        }
+        if (!g_OPSKeyManaged.exchange(true)) {
+            SKSE::log::info("TryManageOPSHotkey: managing OPS key (original={}, unblock={}).", orig, g_UnblockOPS.load());
+        }
+        g_OPSConfig.toggleDIK = 0x4F;
+        g_OPSConfig.toggleVK = VK_NUMPAD1;
+    });
+}
+
+static void TryManageModexHotkey() {
+    if (g_ExcludeMod[AI_Modex].load() || !IsModexInstalled()) return;
+
+    const std::filesystem::path jsonPath = "Data/Interface/Modex/user/settings.json";
+    if (!std::filesystem::exists(jsonPath)) return;
+
+    try {
+        std::ifstream file(jsonPath);
+        if (!file.is_open()) return;
+        nlohmann::json data;
+        file >> data;
+        file.close();
+
+        const int origDefault = 211; // Delete
+        int current = data.value("Open Menu Keybind", origDefault);
+        if (!g_ModexOriginalKeyCaptured.exchange(true)) {
+            if (current > 0) g_ModexOriginalKey.store(current);
+            SKSE::log::info("TryManageModexHotkey: captured Modex original key {}.", g_ModexOriginalKey.load());
+        }
+
+        const int orig = g_ModexOriginalKey.load() > 0 ? g_ModexOriginalKey.load() : origDefault;
+        const int want = g_UnblockModex.load() ? orig : 0; // 0 = disabled
+
+        if (current != want) {
+            data["Open Menu Keybind"] = want;
+            std::ofstream outfile(jsonPath, std::ios::trunc);
+            if (outfile.is_open()) {
+                outfile << data.dump(4);
+                outfile.close();
+                SKSE::log::info("TryManageModexHotkey: updated Modex Keybind {} -> {} (unblock={}).", current, want, g_UnblockModex.load());
+            }
+        }
+        g_ModexConfig.toggleDIK = want > 0 ? want : 0xD3;
+        g_ModexConfig.toggleVK = VKFromDIK(g_ModexConfig.toggleDIK);
+    } catch (const std::exception& e) {
+        SKSE::log::error("TryManageModexHotkey: exception: {}.", e.what());
     }
-    g_OPSConfig.toggleDIK = 0x4F;
-    g_OPSConfig.toggleVK = VK_NUMPAD1;
-    g_OPSKeyManaged.store(true);
+}
+
+static void OpenModex() {
+    if (!g_ModexConfig.enabled) {
+        SKSE::log::warn("OpenModex: Modex is not available.");
+        return;
+    }
+
+    if (g_ActiveMenu.load() == ActiveMenu::Modex || IsModexMenuOpen()) {
+        CloseLauncher();
+        CloseActiveModMenu(ActiveMenu::Modex);
+        g_LastLauncherToggleMs.store(NowMs());
+        return;
+    }
+
+    CloseLauncher();
+    g_LastLauncherToggleMs.store(NowMs());
+    auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
+    if (!vm || !vm->TypeIsValid("Modex")) {
+        SKSE::log::warn("OpenModex: Modex type is not registered in the Papyrus VM.");
+        return;
+    }
+    RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> cb;
+    vm->DispatchStaticCall("Modex", "OpenMenu", RE::MakeFunctionArguments(), cb);
+    g_ActiveMenu.store(ActiveMenu::Modex);
+    SKSE::log::info("OpenModex: dispatched Modex.OpenMenu().");
+}
+
+static bool SetHotkeyReminderHotkeyEnabled(bool enabled) {
+    if (!IsHotkeyReminderInstalled()) return false;
+    auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
+    if (!vm || !vm->TypeIsValid("HotkeyReminder")) return false;
+
+    RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> cb;
+    vm->DispatchStaticCall("HotkeyReminder", "ToggleHotkey",
+        RE::MakeFunctionArguments(static_cast<bool>(enabled)), cb);
+    return true;
+}
+
+static void SyncHotkeyReminderHotkey(bool force) {
+    if (g_ManagementSuspended.load() || !IsHotkeyReminderInstalled()) return;
+
+    const long long now = NowMs();
+    if (!force) {
+        const long long last = g_LastHotkeyReminderSyncMs.load(std::memory_order_relaxed);
+        if (now - last < 5000) return;
+    }
+    g_LastHotkeyReminderSyncMs.store(now, std::memory_order_relaxed);
+
+    const bool nativeEnabled = g_ExcludeMod[AI_HotkeyReminder].load();
+    if (SetHotkeyReminderHotkeyEnabled(nativeEnabled)) {
+        SKSE::log::debug("SyncHotkeyReminderHotkey: native listener {} via ToggleHotkey({}).",
+            nativeEnabled ? "restored (excluded)" : "disabled", nativeEnabled);
+    }
+}
+
+static void OpenHotkeyReminder() {
+    if (!IsHotkeyReminderInstalled()) {
+        SKSE::log::warn("OpenHotkeyReminder: Hotkey Reminder is not available.");
+        return;
+    }
+
+    if (g_ActiveMenu.load() == ActiveMenu::HotkeyReminder) {
+        CloseLauncher();
+        CloseActiveModMenu(ActiveMenu::HotkeyReminder);
+        g_LastLauncherToggleMs.store(NowMs());
+        return;
+    }
+
+    CloseLauncher();
+    g_LastLauncherToggleMs.store(NowMs());
+    auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
+    if (!vm || !vm->TypeIsValid("HotkeyReminder")) {
+        SKSE::log::warn("OpenHotkeyReminder: HotkeyReminder type is not registered in the Papyrus VM.");
+        return;
+    }
+
+    RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> cb;
+    vm->DispatchStaticCall("HotkeyReminder", "OpenMenu", RE::MakeFunctionArguments(), cb);
+    g_ActiveMenu.store(ActiveMenu::HotkeyReminder);
+    SKSE::log::info("OpenHotkeyReminder: dispatched HotkeyReminder.OpenMenu().");
 }
 
 static void TryManageCatMenuHotkey(bool lateRetry) {
@@ -9377,6 +9856,7 @@ static void ManageReShadeHotkey() {
 // already-relocated install doesn't record a bogus "original").
 // ============================================================================
 static const char* kHotkeyBackupPath = "Data/SKSE/Plugins/RisaAllInOneMenu_OriginalHotkeys.json";
+static const char* kCompletedHotkeyBackupPath = "Data/SKSE/Plugins/RisaAllInOneMenu_OriginalHotkeys_Completed.json";
 static nlohmann::json g_HotkeyBackup;
 static bool g_HotkeyBackupLoaded = false;
 
@@ -9629,6 +10109,14 @@ static void CaptureOriginalHotkeys() {
     else
         CaptureOriginal("Dragonborn.toggleKey", dragonbornKey, 0);
 
+    // Modex (JSON root "Open Menu Keybind", normally Delete = 211). Disabled = 0.
+    const auto modexKey = ReadJsonValue("Data/Interface/Modex/user/settings.json", "", "Open Menu Keybind");
+    if (modexKey.is_number_integer() && modexKey.get<int>() == 0) {
+        SKSE::log::warn("HotkeyBackup: SKIP Modex.OpenMenuKeybind = 0 (our disabled value, not a real original).");
+    } else {
+        CaptureOriginal("Modex.OpenMenuKeybind", modexKey, 211);
+    }
+
     SKSE::log::info("HotkeyBackup: capture pass complete ({} entries total).", g_HotkeyBackup.size());
 }
 
@@ -9783,6 +10271,8 @@ static bool IsModInstalled(int aliasIdx) {
         case AI_QAR:       return IsQARInstalled();
         case AI_ModFunctionMenu: return g_ModFunctionMenuConfig.enabled;
         case AI_OPS:       return g_OPSConfig.enabled;
+        case AI_Modex:     return g_ModexConfig.enabled;
+        case AI_HotkeyReminder: return IsHotkeyReminderInstalled();
         default:           return false;
     }
 }
@@ -9809,6 +10299,8 @@ static const char* GetModDisplayName(int aliasIdx) {
         case AI_QAR:           return "Quick Armor Rebalance";
         case AI_ModFunctionMenu: return "Mod Function Menu";
         case AI_OPS:           return "Outfit Preview Selector";
+        case AI_Modex:         return "Modex";
+        case AI_HotkeyReminder:return "Hotkey Reminder";
         default:               return "";
     }
 }
@@ -9847,6 +10339,10 @@ static std::string GetModNativeHotkeyString(int aliasIdx) {
             return FormatHotkey(g_ModFunctionMenuConfig.toggleDIK);
         case AI_OPS:
             return FormatHotkey(g_OPSConfig.toggleDIK);
+        case AI_Modex:
+            return FormatHotkey(g_ModexConfig.toggleDIK);
+        case AI_HotkeyReminder:
+            return "F11";
         case AI_Dragonborn:
             return FormatHotkey(g_DragonbornConfig.toggleDIK);
         case AI_CS:
@@ -9862,7 +10358,7 @@ static std::string GetModNativeHotkeyString(int aliasIdx) {
         case AI_SearchUI:
             return FormatHotkey(static_cast<WORD>(g_SearchUIOrigKey.load()));
         case AI_PartySettings:
-            return FormatModifiedHotkey(g_PartySheetConfig.settingsDIK, g_PartySheetConfig.modifierDIK);
+            return FormatModifiedHotkey(g_PartySheetConfig.settingsDIK, g_PartySheetConfig.settingsModifierDIK);
         case AI_MF:
             return "F1";
         default:
@@ -9944,6 +10440,15 @@ static std::string GetExclusionDetailString(int aliasIdx) {
                    "Default key: Numpad 1\n"
                    "Default value: Hotkey = 79\n"
                    "Changed to: Hotkey = 0 (disabled). Opened through the mod's SKSE mod events; no file edit.\n";
+        case AI_Modex:
+            return "Path: Interface\\Modex\\user\\settings.json\n"
+                   "Default key: Delete\n"
+                   "Default value: \"Open Menu Keybind\" = 211\n"
+                   "Changed to: \"Open Menu Keybind\" = 0 (disabled). Opened dynamically via static call Modex.OpenMenu().\n";
+        case AI_HotkeyReminder:
+            return "Path: MCM\\Config\\HotkeyReminder\\settings.ini (read only; Risa does not edit it)\n"
+                   "Default key: F11\n"
+                   "Changed to: native listener disabled live via HotkeyReminder.ToggleHotkey(false). Opened via HotkeyReminder.OpenMenu().\n";
         default:
             return "";
     }
@@ -9985,6 +10490,7 @@ static WORD GetModNativeKey(int aliasIdx) {
         case AI_ReShade:   return g_ReShadeConfig.toggleDIK;
         case AI_SearchUI:  return static_cast<WORD>(g_SearchUIOrigKey.load());
         case AI_PartySettings: return g_PartySheetConfig.settingsDIK;
+        case AI_HotkeyReminder:return 0x57;
         case AI_MF:        return 0x3B; // Default F1
         default:           return 0;
     }
@@ -10014,6 +10520,7 @@ static std::string GetBackupKeyString(int aliasIdx, bool forceModDefaults) {
         case AI_PartySettings: return "X";
         case AI_MCM:       return "None";
         case AI_QAR:       return "None";
+        case AI_HotkeyReminder: return "F11";
     }
 
     nlohmann::json val = modDefaultVal;
@@ -10176,6 +10683,20 @@ static bool RestoreModDefaults(int aliasIdx, bool forceModDefaults) {
                     SKSE::log::info("RestoreModDefaults: restored Outfit Preview Selector Hotkey = {}.", v);
             }
             break;
+        case AI_Modex:
+            {
+                nlohmann::json o = GetOriginal("Modex.OpenMenuKeybind");
+                const bool fromBak = !forceModDefaults && o.is_number_integer();
+                const nlohmann::json v = fromBak ? o : nlohmann::json(211); // Delete
+                const int r = SetJsonRootValue("Data/Interface/Modex/user/settings.json", "Open Menu Keybind", v);
+                track("Data/Interface/Modex/user/settings.json", r);
+            }
+            break;
+        case AI_HotkeyReminder:
+            if (SetHotkeyReminderHotkeyEnabled(true)) {
+                SKSE::log::info("RestoreModDefaults: re-enabled Hotkey Reminder native listener via ToggleHotkey(true).");
+            }
+            break;
         case AI_Dragonborn:
             // Dragonborn's Toolkit v0.5+ is managed only through its runtime API - Risa never edits
             // SkyrimCheatMenu.json, so there is nothing in the file to restore. Just hand the key back
@@ -10308,6 +10829,9 @@ static bool RestoreAllModDefaults(bool forceModDefaults) {
 
     SKSEMenuFramework::SetHotkeyEnabled(true);
     SKSE::log::info("Restore[API] Enabled SKSE Menu Framework hotkey via API.");
+    if (SetHotkeyReminderHotkeyEnabled(true)) {
+        SKSE::log::info("Restore[API] Enabled Hotkey Reminder's native listener via ToggleHotkey(true).");
+    }
     ini("Data/SKSE/Plugins/OpenAnimationReplacer.ini", "uToggleUIKey",      "OAR.uToggleUIKey",      24);
     ini("Data/SKSE/Plugins/OpenAnimationReplacer.ini", "uToggleUIKeyShift", "OAR.uToggleUIKeyShift", 1);
     ini("Data/SKSE/Plugins/OpenAnimationReplacer.ini", "uToggleUIKeyCtrl",  "OAR.uToggleUIKeyCtrl",  0);
@@ -10381,6 +10905,14 @@ static bool RestoreAllModDefaults(bool forceModDefaults) {
         if (SetOPSHotkey(v))
             SKSE::log::info("Restore[{}] OPS Hotkey = {}", fromBak ? "BACKUP" : "default", v);
     }
+    {
+        nlohmann::json o = GetOriginal("Modex.OpenMenuKeybind");
+        const bool fromBak = !forceModDefaults && o.is_number_integer();
+        const nlohmann::json v = fromBak ? o : nlohmann::json(211); // Delete
+        const int r = SetJsonRootValue("Data/Interface/Modex/user/settings.json", "Open Menu Keybind", v);
+        track("Data/Interface/Modex/user/settings.json", r);
+        SKSE::log::info("Restore[{}] Modex Open Menu Keybind = {}", fromBak ? "BACKUP" : "default", v.dump());
+    }
     // Dragonborn's Toolkit v0.5+ is managed only through its runtime API - Risa never edits
     // SkyrimCheatMenu.json, so nothing in the file needs restoring. Hand the key back live by
     // re-enabling its native listener; only older builds fall back to the JSON write.
@@ -10444,21 +10976,43 @@ static bool RestoreAllModDefaults(bool forceModDefaults) {
     SaveButtonOrder();
 
     if (allWritesSucceeded) {
-        std::error_code ec;
-        const bool removed = std::filesystem::remove(kHotkeyBackupPath, ec);
-        if (ec || (!removed && std::filesystem::exists(kHotkeyBackupPath))) {
-            allWritesSucceeded = false;
-            SKSE::log::error("Restore: settings were restored, but could not remove {}: {}",
-                kHotkeyBackupPath, ec ? ec.message() : "unknown error");
-        } else {
+        const std::filesystem::path activeBackup = kHotkeyBackupPath;
+        const std::filesystem::path completedBackup = kCompletedHotkeyBackupPath;
+        bool archived = false;
+        if (std::filesystem::exists(activeBackup)) {
+            std::error_code copyEc;
+            std::filesystem::copy_file(activeBackup, completedBackup,
+                std::filesystem::copy_options::overwrite_existing, copyEc);
+            if (copyEc) {
+                allWritesSucceeded = false;
+                SKSE::log::error("Restore: settings were restored, but could not archive {} as {}: {}",
+                    activeBackup.string(), completedBackup.string(), copyEc.message());
+            } else {
+                std::error_code removeEc;
+                const bool removed = std::filesystem::remove(activeBackup, removeEc);
+                if (removeEc || !removed) {
+                    allWritesSucceeded = false;
+                    SKSE::log::error("Restore: completed backup was written, but could not remove active backup {}: {}",
+                        activeBackup.string(), removeEc ? removeEc.message() : "unknown error");
+                } else {
+                    archived = true;
+                }
+            }
+        }
+        if (allWritesSucceeded) {
             g_HotkeyBackup = nlohmann::json::object();
             g_HotkeyBackupLoaded = true;
-            SKSE::log::info("Restore: removed completed originals backup {}; the next install will capture fresh settings.", kHotkeyBackupPath);
+            if (archived) {
+                SKSE::log::info("Restore: archived completed originals backup as {}; the active backup was cleared so the next install captures fresh settings.",
+                    completedBackup.string());
+            } else {
+                SKSE::log::info("Restore: no active originals backup existed; the next install will capture fresh settings.");
+            }
         }
     }
     if (g_FileChangeLog) {
         g_FileChangeLog->info("--- RestoreAllModDefaults: {}. {} ---",
-            allWritesSucceeded ? "COMPLETE; originals backup removed" : "INCOMPLETE; originals backup kept for retry",
+            allWritesSucceeded ? "COMPLETE; originals backup archived as completed" : "INCOMPLETE; active originals backup kept for retry",
             allWritesSucceeded ? "Restart Skyrim once, then it is safe to remove the mod." : "Check the main log and retry before uninstalling.");
         g_FileChangeLog->flush();
     }
@@ -10499,6 +11053,7 @@ static void MessageHandler(SKSE::MessagingInterface::Message* msg) {
         LoadOPSConfig();
         LoadDragonbornConfig();
         LoadReShadeConfig();
+        LoadModexConfig();
         TryManageKreatEHotkey();
         TryManageCSHotkey();
         TryManageCatMenuHotkey();
@@ -10506,6 +11061,8 @@ static void MessageHandler(SKSE::MessagingInterface::Message* msg) {
         TryManageFLICKHotkey();
         TryManageOPSHotkey();
         TryManageDragonbornHotkey();
+        TryManageModexHotkey();
+        SyncHotkeyReminderHotkey(true);
         // Retry add-on registration in case ReShade's add-on API wasn't ready at plugin load.
         // Still early enough (before the renderer/swapchain) to catch init_effect_runtime.
         if (!g_ReShadeAddonActive.load() && g_ReShadeConfig.enabled && RisaReShade::RegisterAddon()) {
@@ -10564,6 +11121,21 @@ static void MessageHandler(SKSE::MessagingInterface::Message* msg) {
         break;
     }
 
+    case SKSE::MessagingInterface::kPostLoadGame:
+    case SKSE::MessagingInterface::kNewGame: {
+        SKSE::log::info("MessageHandler: post-load game or new game event received. Re-evaluating OPS hotkey.");
+        g_OPSOriginalKeyCaptured.store(false);
+        g_OPSKeyManaged.store(false);
+        g_OPSFirstApply.store(true);
+        TryManageOPSHotkey(false); // force immediate evaluation
+        // Hotkey Reminder's OnGameReload/Init path registers its configured key again.
+        // Reassert keyless control for every loaded save and every new game; the normal
+        // five-second monitor also covers ordering races and later MCM changes.
+        g_LastHotkeyReminderSyncMs.store(0);
+        SyncHotkeyReminderHotkey(true);
+        break;
+    }
+
     default: break;
     }
 }
@@ -10572,7 +11144,7 @@ static void MessageHandler(SKSE::MessagingInterface::Message* msg) {
 // Plugin entry point
 // ============================================================================
 SKSEPluginInfo(
-    .Version              = REL::Version{ 1, 5, 5, 0 },
+    .Version              = REL::Version{ 1, 5, 6, 0 },
     .Name                 = "RisaAllInOneMenu",
     .Author               = "Risa",
     .SupportEmail         = "",
@@ -10617,6 +11189,7 @@ SKSEPluginLoad(const SKSE::LoadInterface* skse) {
     TryManageFLICKHotkey();
     TryManageOPSHotkey();
     TryManageDragonbornHotkey();
+    TryManageModexHotkey();
     LoadDebugMenuConfig();
     ManageDebugMenuKey();
 
