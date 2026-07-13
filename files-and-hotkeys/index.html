@@ -397,6 +397,24 @@
         
       
       
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Files & Hotkeys Edited
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
       <a href="./" class="md-nav__link md-nav__link--active">
         
   
@@ -413,6 +431,58 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#files-risa-edits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Files Risa edits
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#managed-live-without-editing-another-mods-file" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Managed live without editing another mod’s file
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#risas-own-support-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Risa’s own support files
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
       
     </li>
   
@@ -440,6 +510,47 @@
     
   
   
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#files-risa-edits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Files Risa edits
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#managed-live-without-editing-another-mods-file" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Managed live without editing another mod’s file
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#risas-own-support-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Risa’s own support files
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
 </nav>
                   </div>
                 </div>
@@ -461,61 +572,122 @@
 
 
 <h1 id="files-hotkeys-edited">Files &amp; Hotkeys Edited<a class="headerlink" href="#files-hotkeys-edited" title="Permanent link">&para;</a></h1>
-<p><span class="muted">"Default" is your original value (what Risa restores). "Changed to" is what Risa sets while installed. Original values captured before relocation are restored whenever possible, and the defaults below are the fallback used only if your original wasn't captured.</span></p>
-<p><span class="gold">Keys freed for you:</span> <span class="muted">Home (dMenu), Backspace (IED), Shift + Home (Improved Camera), F7 (FLICK), and F1 (Debug Menu, when it relocates to an unpressable F17).</span></p>
+<p><span class="muted">“Original” means the value Risa captures before managing a mod. Restore for Uninstall returns captured values whenever possible; the listed upstream defaults are used only as fallbacks.</span></p>
 <details class="files-edited">
-<summary>Show every file and value Risa edits</summary>
+<summary>Keys Freed for You — 25 bindings (19 unique keys/chords)</summary>
+<p>If every supported integration is installed, Risa manages <strong>25 default hotkey bindings across 19 mods with native keys</strong>. Those bindings represent <strong>19 unique keys or chords</strong>, because several mods share F1, Home, F6, or End. MCM and Quick Armor Rebalance are also managed, but have no native default hotkey.</p>
+<ul>
+<li><strong>Mod Configuration Menu (MCM):</strong> None</li>
+<li><strong>SKSE Menu Framework:</strong> F1</li>
+<li><strong>dMenu NG:</strong> Home</li>
+<li><strong>FLICK:</strong> F7</li>
+<li><strong>CatMenu:</strong> F6</li>
+<li><strong>Dragonborn’s Toolkit:</strong> F1</li>
+<li><strong>Debug Menu:</strong> F1</li>
+<li><strong>SearchUI:</strong> F4</li>
+<li><strong>Mod Function Menu:</strong> F1</li>
+<li><strong>Modex:</strong> Delete</li>
+<li><strong>Hotkey Reminder:</strong> F11</li>
+<li><strong>Open Animation Replacer:</strong> Shift + O</li>
+<li><strong>Immersive Equipment Displays:</strong> Backspace</li>
+<li><strong>Quick Armor Rebalance:</strong> None</li>
+<li><strong>Outfit Preview Selector:</strong> Numpad 1</li>
+<li><strong>Skyrim Party Sheet:</strong> X (Settings), F6 (Party Sheet), Y (Inspect Card), U (Character Sheet) — 4 bindings</li>
+<li><strong>ENB Editor:</strong> Shift + Enter</li>
+<li><strong>Community Shaders:</strong> End (Main), Shift + End (Editor), F10 (Overlay), Numpad * (Effects) — 4 bindings</li>
+<li><strong>Improved Camera:</strong> Shift + Home</li>
+<li><strong>ReShade:</strong> Home</li>
+<li><strong>KreatE:</strong> End</li>
+</ul>
+</details>
+<h2 id="files-risa-edits">Files Risa edits<a class="headerlink" href="#files-risa-edits" title="Permanent link">&para;</a></h2>
+<p>Only the listed hotkey values are changed. Other settings in each file are preserved.</p>
 <p><strong class="blue">Open Animation Replacer</strong><br>
 <span class="gold">Path:</span> SKSE\Plugins\OpenAnimationReplacer.ini<br>
 <span class="gold">Default key:</span> Shift + O<br>
 <span class="gold">Default values:</span> uToggleUIKey = 24 | uToggleUIKeyShift = 1 | uToggleUIKeyCtrl = 0 | uToggleUIKeyAlt = 0<br>
-<span class="gold">Changed to:</span> uToggleUIKey = F13 (unpressable)</p>
-<p><strong class="blue">Improved Camera SE</strong> <span class="muted">(Discord version requires no .ini edits)</span><br>
+<span class="gold">Changed to:</span> uToggleUIKey = F13 | Shift/Ctrl/Alt = 0. F13 is used as an unpressable parking key.</p>
+
+<p><strong class="blue">Improved Camera SE</strong> <span class="muted">(the NG/API path may require no file edit)</span><br>
 <span class="gold">Path:</span> SKSE\Plugins\ImprovedCameraSE\ImprovedCameraSE.ini<br>
-<span class="gold">Default key:</span> Left Shift + Home<br>
-<span class="gold">Default value:</span> MenuKey = 0x24<br>
-<span class="gold">Changed to:</span> Not relocated. The key stays Home and is hidden only from Improved Camera, so Shift + Home is free for everything else.</p>
+<span class="gold">Default key:</span> Shift + Home<br>
+<span class="gold">Default value:</span> MenuKey = 0x24 (Home)<br>
+<span class="gold">Changed to:</span> MenuKey is normalized to Home when needed. Risa then hides the chord only from Improved Camera, leaving Shift + Home available elsewhere.</p>
+
 <p><strong class="blue">Immersive Equipment Displays</strong><br>
 <span class="gold">Path:</span> SKSE\Plugins\ImmersiveEquipmentDisplays.ini<br>
 <span class="gold">Default key:</span> Backspace<br>
 <span class="gold">Default values:</span> ToggleKeys = 0x0E | OverrideToggleKeys = false<br>
-<span class="gold">Changed to:</span> ToggleKeys = F16 (unpressable) | OverrideToggleKeys = true</p>
+<span class="gold">Changed to:</span> ToggleKeys = F16 | OverrideToggleKeys = true. F16 is used as an unpressable parking key.</p>
+
 <p><strong class="blue">Debug Menu</strong><br>
 <span class="gold">Path:</span> MCM\Settings\DebugMenu.ini (or MCM\Config\DebugMenu\settings.ini)<br>
 <span class="gold">Default key:</span> F1<br>
 <span class="gold">Default value:</span> uOpenMenuHotkey = 59<br>
-<span class="gold">Changed to:</span> uOpenMenuHotkey = F17 (unpressable). <span class="muted">Only relocated when its key collides with the launcher key or was set by an older Risa build; otherwise it stays on its own key and is freed at the input level with no edit.</span></p>
+<span class="gold">Changed to:</span> uOpenMenuHotkey = F17 only when it conflicts with the launcher or contains an older Risa relocation. Otherwise its configured key is left in the file and intercepted live.</p>
+
 <p><strong class="blue">KreatE</strong><br>
 <span class="gold">Path:</span> KreatE\UserSettings.ini<br>
 <span class="gold">Default key:</span> End<br>
 <span class="gold">Default value:</span> GUIToggleKeys = 0x23<br>
-<span class="gold">Changed to:</span> GUIToggleKeys = F18 (unpressable)</p>
+<span class="gold">Changed to:</span> GUIToggleKeys = F18 (unpressable parking key).</p>
+
 <p><strong class="blue">Community Shaders</strong><br>
-<span class="gold">Path:</span> SKSE\Plugins\CommunityShaders\SettingsUser.json (or SettingsDefault.json)<br>
+<span class="gold">Paths:</span> SKSE\Plugins\CommunityShaders\SettingsUser.json and SettingsDefault.json when present<br>
 <span class="gold">Default keys:</span> End / Shift + End / F10 / Numpad *<br>
-<span class="gold">Default values under "Menu":</span> "ToggleKey": 35 | "CSEditorToggleKey": [16, 35] | "OverlayToggleKey": 121 | "EffectToggleKey": 106<br>
-<span class="gold">Changed to:</span> ToggleKey = F19 | CSEditorToggleKey = F15 | OverlayToggleKey = F23 | EffectToggleKey = F24 (all unpressable)</p>
+<span class="gold">Default values under “Menu”:</span> "ToggleKey": 35 | "CSEditorToggleKey": [16, 35] | "OverlayToggleKey": 121 | "EffectToggleKey": 106<br>
+<span class="gold">Changed to:</span> ToggleKey = F19 | CSEditorToggleKey = F15 with no modifier | OverlayToggleKey = F23 | EffectToggleKey = F24.</p>
+
 <p><strong class="blue">CatMenu</strong><br>
 <span class="gold">Path:</span> SKSE\Plugins\catmenu\settings.json<br>
 <span class="gold">Default key:</span> F6<br>
 <span class="gold">Default value:</span> "toggle_key": 577<br>
-<span class="gold">Changed to:</span> "toggle_key": F21</p>
+<span class="gold">Changed to:</span> "toggle_key": 592 (F21 parking key). Risa intercepts the listener and opens CatMenu directly.</p>
+
 <p><strong class="blue">Mod Function Menu</strong><br>
 <span class="gold">Path:</span> SKSE\Plugins\ccld_ModFunctionMenu.toml<br>
 <span class="gold">Default key:</span> F1<br>
 <span class="gold">Default value:</span> [Controls.Keyboard] iHotkey = 59<br>
-<span class="gold">Changed to:</span> iHotkey = F20 (unpressable). <span class="muted">Restart once after installing so it reads the new value.</span></p>
-<p><strong class="blue">Skyrim Cheat Menu (Dragonborn's Toolkit)</strong> <span class="muted">(v0.5+ no longer needs this edit)</span><br>
+<span class="gold">Changed to:</span> iHotkey = 107 (F20 unpressable parking key). Restart once so the mod reads the value.</p>
+
+<p><strong class="blue">Modex</strong><br>
+<span class="gold">Path:</span> Interface\Modex\user\settings.json<br>
+<span class="gold">Default key:</span> Delete<br>
+<span class="gold">Default value:</span> "Open Menu Keybind" = 211<br>
+<span class="gold">Changed to:</span> "Open Menu Keybind" = 0 (disabled). Risa opens Modex through Modex.OpenMenu().</p>
+
+<p><strong class="blue">Dragonborn’s Toolkit legacy fallback</strong> <span class="muted">(v0.5+ uses its live API and does not need this edit)</span><br>
 <span class="gold">Path:</span> SKSE\Plugins\SkyrimCheatMenu.json<br>
 <span class="gold">Default key:</span> F1<br>
 <span class="gold">Default value:</span> "toggleKey": "F1"<br>
-<span class="gold">Changed to:</span> Nothing on v0.5+ (the hotkey is freed live through the mod's API). <span class="muted">Only older builds get "toggleKey": 0 written as a fallback.</span></p>
+<span class="gold">Changed to:</span> "toggleKey": 0 only when the runtime hotkey API is unavailable.</p>
+
 <p><strong class="blue">ReShade</strong><br>
 <span class="gold">Path:</span> ReShade.ini in the game folder<br>
 <span class="gold">Default key:</span> Home<br>
 <span class="gold">Default value:</span> KeyOverlay=36,0,0,0<br>
-<span class="gold">Changed to:</span> KeyOverlay=0,0,0,0 via the ReShade add-on API so Home stays free.</p>
-</details>
+<span class="gold">Changed to:</span> KeyOverlay=0,0,0,0. The file disables the native key; Risa’s ReShade add-on opens and closes the overlay through the API.</p>
+
+<h2 id="managed-live-without-editing-another-mods-file">Managed live without editing another mod’s file<a class="headerlink" href="#managed-live-without-editing-another-mods-file" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>SKSE Menu Framework:</strong> native F1 listener disabled/restored through its API.</li>
+<li><strong>dMenu NG:</strong> Home disabled/restored through the v2 API. Stock dMenu without that API is left unmanaged.</li>
+<li><strong>FLICK:</strong> F7 disabled/restored through its hotkey API.</li>
+<li><strong>SearchUI:</strong> F4 parked live on F18 through Papyrus.</li>
+<li><strong>Outfit Preview Selector:</strong> Numpad 1 parked live on F18 through its Papyrus hotkey property; no INI is edited.</li>
+<li><strong>Hotkey Reminder:</strong> F11 listener disabled/restored through ToggleHotkey(). Its settings INI is read only.</li>
+<li><strong>Skyrim Party Sheet:</strong> X, F6, Y, and U are intercepted live; PartyUserSettings.ini is read only.</li>
+<li><strong>ENB Editor:</strong> Shift + Enter is hidden only from ENB through caller-scoped input handling.</li>
+<li><strong>Dragonborn’s Toolkit v0.5+:</strong> F1 listener disabled/restored through its runtime API.</li>
+<li><strong>Mod Configuration Menu:</strong> no native hotkey to edit.</li>
+<li><strong>Quick Armor Rebalance:</strong> no native default hotkey to edit.</li>
+</ul>
+<h2 id="risas-own-support-files">Risa’s own support files<a class="headerlink" href="#risas-own-support-files" title="Permanent link">&para;</a></h2>
+<ul>
+<li>SKSE\Plugins\RisaAllInOneMenu.ini stores Risa’s settings and original-hotkey options.</li>
+<li>SKSE\Plugins\RisaAllInOneMenu_OriginalHotkeys.json stores captured values used by Restore for Uninstall and is removed after a successful complete restore.</li>
+<li>Documents\My Games\Skyrim Special Edition\SKSE\RisaAllInOneMenu_FileChanges.log records hotkey file edits and restores when file-change logging is enabled.</li>
+</ul>
 
 
 
