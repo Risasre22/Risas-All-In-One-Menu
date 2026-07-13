@@ -1,6 +1,6 @@
 # Risa's All In One Menu
 
-Risa's All In One Menu is an SKSE plugin that places supported mod menus behind one configurable launcher. It manages their native hotkeys so those keys can be reused for gameplay, while each original menu remains available through the launcher or an optional user-defined shortcut.
+Risa's All In One Menu is an SKSE plugin that puts supported mod menus behind one configurable launcher. It disables, relocates, or intercepts their native hotkeys so those keys can be reused for gameplay while every installed menu remains available from one place.
 
 Press **F1** by default to open or close the launcher. **Escape** also closes it.
 
@@ -12,8 +12,8 @@ Press **F1** by default to open or close the launcher. **Escape** also closes it
 - [Open Animation Replacer](https://www.nexusmods.com/skyrimspecialedition/mods/92109)
 - [Immersive Equipment Displays](https://www.nexusmods.com/skyrimspecialedition/mods/62001)
 - [Debug Menu](https://www.nexusmods.com/skyrimspecialedition/mods/136456)
-- [dMenu and dMenu NG](https://www.nexusmods.com/skyrimspecialedition/mods/166751)
-- [Improved Camera SE](https://www.nexusmods.com/skyrimspecialedition/mods/93962) / [Improved Camera NG](https://discord.gg/Hr7pRchWcf) *(NG is a Discord link, you can find the file in the updates channel)*
+- [dMenu NG](https://www.nexusmods.com/skyrimspecialedition/mods/166751) using the API-enabled compatibility build offered by the FOMOD
+- [Improved Camera SE](https://www.nexusmods.com/skyrimspecialedition/mods/93962) / Improved Camera NG
 - [ENB Editor](http://enbdev.com/download_mod_tesskyrimse.html)
 - [FLICK](https://www.nexusmods.com/skyrimspecialedition/mods/181603)
 - [KreatE](https://www.nexusmods.com/skyrimspecialedition/mods/83757)
@@ -23,21 +23,27 @@ Press **F1** by default to open or close the launcher. **Escape** also closes it
 - [CatMenu](https://www.nexusmods.com/skyrimspecialedition/mods/65958)
 - [ReShade](https://reshade.me/)
 - [Quick Armor Rebalance](https://www.nexusmods.com/skyrimspecialedition/mods/127967)
+- Mod Function Menu
+- Outfit Preview Selector
+- Modex
+- Hotkey Reminder
 
-Only integrations detected in the current installation are displayed.
+Only integrations detected in the current installation are displayed. See the [Integration Ledger](https://risasre22.github.io/Risas-All-In-One-Menu/integration-ledger/) for the current integration method and reliability level of each supported mod.
 
 ## Features
 
-- One launcher for supported SKSE and overlay menus
-- Configurable launcher key with Ctrl, Shift, Alt, double-tap, and Easy Close options
+- One launcher for supported SKSE, Scaleform, and overlay menus
+- Configurable launcher key with Ctrl, Shift, Alt, double-press, hold, and Easy Close options
 - Rebindable per-menu shortcuts saved across updates and new games
-- Optional access to each menu's original shortcut
+- Settings and Exclusions controls for supported integrations
+- Optional access to a mod's original shortcut while it is managed
 - Duplicate-key and launcher-key conflict detection
 - Dedicated Community Shaders and Skyrim Party Sheet submenus
-- Drag-and-drop button ordering, adjustable UI scale, and saved window placement
-- Official APIs where available, with guarded compatibility integrations elsewhere
-- Local diagnostic logging, disabled by default
-- Restoration of captured original settings or supported defaults before uninstalling
+- Drag-and-drop button ordering, adjustable font/UI scale, and saved window placement
+- Immediate language switching when a compatible translation JSON is installed
+- Official runtime APIs where available, with guarded compatibility integrations elsewhere
+- Main troubleshooting log plus an optional audit log containing only files edited or restored
+- Uninstall restoration using captured user settings or original supported-mod defaults
 
 ## Requirements
 
@@ -49,24 +55,50 @@ The supported menu mods themselves are optional.
 
 ## Installation
 
-Install the release archive with a mod manager. Some supported mods create their configuration files only after they have run once.
+Install the release archive with a mod manager and choose any desired FOMOD options. The optional dMenu component is the API-enabled compatibility build used by this integration.
 
-When Risa changes a managed configuration file, a translucent ten-second notification appears at startup. Restart Skyrim once before playing so every affected mod reads its updated setting.
+Some supported mods create their configuration files only after they have run once. When this menu changes a managed configuration file, a translucent ten-second notification appears at startup. Restart Skyrim once so every affected mod reloads its setting.
 
-## Updating
+## Updating and Compatibility
 
-Replace the previous version normally. User settings are stored separately from the DLL and are retained across updates.
+Replace the previous version normally. Launcher settings are stored separately from the DLL and remain across updates.
+
+When this mod or a supported mod receives an update, check the [Integration Ledger](https://risasre22.github.io/Risas-All-In-One-Menu/integration-ledger/) for compatibility. A supported mod can change its menu or hotkey implementation without notice.
+
+Do not change a managed mod's native hotkey from inside that mod while it is being managed. Exclude it first, apply the exclusion, restart Skyrim if requested, and then change its native setting.
+
+## Exclusions
+
+The **Exclusions** tab stops this menu from managing selected mods and releases their native controls. When newly excluding a mod, choose one of these restore modes:
+
+- **Restore User Original Settings** uses values captured before this menu first managed the mod.
+- **Restore Original Mod Defaults** ignores captured values and applies the supported mod's original defaults.
+
+Exclusions keep the shared captured-settings backup because other integrations may still need it. API and keyless integrations are released live when no configuration file needs restoring.
 
 ## Uninstallation
 
 Before removing the mod:
 
 1. Open **Settings > Maintenance**.
-2. Select **Restore My Original Settings** to restore captured user values, or **Restore Supported Mod Defaults** to restore standard defaults.
-3. Exit Skyrim.
-4. Disable or remove Risa's All In One Menu before launching Skyrim again.
+2. Select **Restore User Original Settings** to restore captured pre-install values, or **Restore Original Mod Defaults** to apply the supported mods' original defaults.
+3. Confirm **Yes, restore for uninstall**.
+4. Exit Skyrim when prompted.
+5. Disable or remove Risa's All In One Menu before launching Skyrim again.
 
-Removing the plugin without restoring first can leave supported mods assigned to Risa's managed internal keys.
+The user-original backup records settings that existed before this menu first managed them. It does not record hotkeys changed later from another mod's settings window or hotkeys assigned only inside this launcher.
+
+After a successful full restore, `SKSE\Plugins\RisaAllInOneMenu_OriginalHotkeys.json` is archived as `SKSE\Plugins\RisaAllInOneMenu_OriginalHotkeys_Completed.json`. The active filename is cleared so a future installation captures fresh settings. If restoration or archiving is incomplete, the active backup is kept for retrying.
+
+Removing the plugin without restoring first can leave supported mods assigned to managed internal keys. See [Files & Hotkeys Edited](https://risasre22.github.io/Risas-All-In-One-Menu/files-and-hotkeys/) for the exact files and settings involved.
+
+## Translations
+
+Translation files belong in:
+
+`SKSE\Plugins\RisaAllInOneMenu\Translations\`
+
+Select an installed translation from the language dropdown. Changes apply immediately. English (`en.json`) is included in the release archive.
 
 ## Building
 
@@ -101,10 +133,14 @@ Windows users can alternatively run `build.bat` after setting `VCPKG_ROOT`.
 
 Enable **Settings > Maintenance > Enable logging**, reproduce the problem, and include:
 
-- `RisaAllInOneMenu.log` from `Documents/My Games/Skyrim Special Edition/SKSE/`
-- Skyrim runtime and SKSE versions
+- `RisaAllInOneMenu.log` from `Documents\My Games\Skyrim Special Edition\SKSE\`
+- `RisaAllInOneMenu_FileChanges.log` when the issue involves hotkey management or restoration
+- Skyrim runtime, SKSE version, and this mod's version
 - The affected menu mod and its version
-- The exact button and key sequence used
+- The exact launcher button and key sequence used
+- Whether the mod's own native hotkey still works
+
+Do not delete `RisaAllInOneMenu_OriginalHotkeys.json` while troubleshooting a failed restore.
 
 ## License
 
