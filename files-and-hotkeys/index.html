@@ -448,10 +448,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#files-risa-edits" class="md-nav__link">
+  <a href="#files-my-menu-edits" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Files Risa edits
+        Files my menu edits
       
     </span>
   </a>
@@ -470,10 +470,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#risas-own-support-files" class="md-nav__link">
+  <a href="#my-menus-support-files" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Risa’s own support files
+        My menu’s support files
       
     </span>
   </a>
@@ -517,10 +517,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#files-risa-edits" class="md-nav__link">
+  <a href="#files-my-menu-edits" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Files Risa edits
+        Files my menu edits
       
     </span>
   </a>
@@ -539,10 +539,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#risas-own-support-files" class="md-nav__link">
+  <a href="#my-menus-support-files" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Risa’s own support files
+        My menu’s support files
       
     </span>
   </a>
@@ -572,10 +572,10 @@
 
 
 <h1 id="files-hotkeys-edited">Files &amp; Hotkeys Edited<a class="headerlink" href="#files-hotkeys-edited" title="Permanent link">&para;</a></h1>
-<p><span class="muted">“Original” means the value Risa captures before managing a mod. Restore for Uninstall returns captured values whenever possible; the listed upstream defaults are used only as fallbacks.</span></p>
+<p><span class="muted">“Original” means the value my menu captures before managing a mod. Restore for Uninstall returns captured values whenever possible; the listed upstream defaults are used only as fallbacks.</span></p>
 <details class="files-edited">
 <summary>Keys Freed for You — 25 bindings (19 unique keys/chords)</summary>
-<p>If every supported integration is installed, Risa manages <strong>25 default hotkey bindings across 19 mods with native keys</strong>. Those bindings represent <strong>19 unique keys or chords</strong>, because several mods share F1, Home, F6, or End. MCM and Quick Armor Rebalance are also managed, but have no native default hotkey.</p>
+<p>If every supported integration is installed, my menu manages <strong>25 default hotkey bindings across 19 mods with native keys</strong>. Those bindings represent <strong>19 unique keys or chords</strong>, because several mods share F1, Home, F6, or End. MCM and Quick Armor Rebalance are also managed, but have no native default hotkey.</p>
 <ul>
 <li><strong>Mod Configuration Menu (MCM):</strong> None</li>
 <li><strong>SKSE Menu Framework:</strong> F1</li>
@@ -600,7 +600,7 @@
 <li><strong>KreatE:</strong> End</li>
 </ul>
 </details>
-<h2 id="files-risa-edits">Files Risa edits<a class="headerlink" href="#files-risa-edits" title="Permanent link">&para;</a></h2>
+<h2 id="files-my-menu-edits">Files my menu edits<a class="headerlink" href="#files-my-menu-edits" title="Permanent link">&para;</a></h2>
 <p>Only the listed hotkey values are changed. Other settings in each file are preserved.</p>
 <p><strong class="blue">Open Animation Replacer</strong><br>
 <span class="gold">Path:</span> SKSE\Plugins\OpenAnimationReplacer.ini<br>
@@ -612,7 +612,7 @@
 <span class="gold">Path:</span> SKSE\Plugins\ImprovedCameraSE\ImprovedCameraSE.ini<br>
 <span class="gold">Default key:</span> Shift + Home<br>
 <span class="gold">Default value:</span> MenuKey = 0x24 (Home)<br>
-<span class="gold">Changed to:</span> MenuKey is normalized to Home when needed. Risa then hides the chord only from Improved Camera, leaving Shift + Home available elsewhere.</p>
+<span class="gold">Changed to:</span> MenuKey is normalized to Home when needed. My menu then hides the chord only from Improved Camera, leaving Shift + Home available elsewhere.</p>
 
 <p><strong class="blue">Immersive Equipment Displays</strong><br>
 <span class="gold">Path:</span> SKSE\Plugins\ImmersiveEquipmentDisplays.ini<br>
@@ -624,7 +624,7 @@
 <span class="gold">Path:</span> MCM\Settings\DebugMenu.ini (or MCM\Config\DebugMenu\settings.ini)<br>
 <span class="gold">Default key:</span> F1<br>
 <span class="gold">Default value:</span> uOpenMenuHotkey = 59<br>
-<span class="gold">Changed to:</span> uOpenMenuHotkey = F17 only when it conflicts with the launcher or contains an older Risa relocation. Otherwise its configured key is left in the file and intercepted live.</p>
+<span class="gold">Changed to:</span> uOpenMenuHotkey = F17 only when it conflicts with the launcher or contains an older relocation made by my menu. Otherwise its configured key is left in the file and intercepted live.</p>
 
 <p><strong class="blue">KreatE</strong><br>
 <span class="gold">Path:</span> KreatE\UserSettings.ini<br>
@@ -642,7 +642,7 @@
 <span class="gold">Path:</span> SKSE\Plugins\catmenu\settings.json<br>
 <span class="gold">Default key:</span> F6<br>
 <span class="gold">Default value:</span> "toggle_key": 577<br>
-<span class="gold">Changed to:</span> "toggle_key": 592 (F21 parking key). Risa intercepts the listener and opens CatMenu directly.</p>
+<span class="gold">Changed to:</span> "toggle_key": 592 (F21 parking key). My menu intercepts the listener and opens CatMenu directly.</p>
 
 <p><strong class="blue">Mod Function Menu</strong><br>
 <span class="gold">Path:</span> SKSE\Plugins\ccld_ModFunctionMenu.toml<br>
@@ -654,7 +654,7 @@
 <span class="gold">Path:</span> Interface\Modex\user\settings.json<br>
 <span class="gold">Default key:</span> Delete<br>
 <span class="gold">Default value:</span> "Open Menu Keybind" = 211<br>
-<span class="gold">Changed to:</span> "Open Menu Keybind" = 0 (disabled). Risa opens Modex through Modex.OpenMenu().</p>
+<span class="gold">Changed to:</span> "Open Menu Keybind" = 0 (disabled). My menu opens Modex through Modex.OpenMenu().</p>
 
 <p><strong class="blue">Dragonborn’s Toolkit legacy fallback</strong> <span class="muted">(v0.5+ uses its live API and does not need this edit)</span><br>
 <span class="gold">Path:</span> SKSE\Plugins\SkyrimCheatMenu.json<br>
@@ -666,7 +666,7 @@
 <span class="gold">Path:</span> ReShade.ini in the game folder<br>
 <span class="gold">Default key:</span> Home<br>
 <span class="gold">Default value:</span> KeyOverlay=36,0,0,0<br>
-<span class="gold">Changed to:</span> KeyOverlay=0,0,0,0. The file disables the native key; Risa’s ReShade add-on opens and closes the overlay through the API.</p>
+<span class="gold">Changed to:</span> KeyOverlay=0,0,0,0. The file disables the native key; my ReShade add-on opens and closes the overlay through the API.</p>
 
 <h2 id="managed-live-without-editing-another-mods-file">Managed live without editing another mod’s file<a class="headerlink" href="#managed-live-without-editing-another-mods-file" title="Permanent link">&para;</a></h2>
 <ul>
@@ -682,9 +682,9 @@
 <li><strong>Mod Configuration Menu:</strong> no native hotkey to edit.</li>
 <li><strong>Quick Armor Rebalance:</strong> no native default hotkey to edit.</li>
 </ul>
-<h2 id="risas-own-support-files">Risa’s own support files<a class="headerlink" href="#risas-own-support-files" title="Permanent link">&para;</a></h2>
+<h2 id="my-menus-support-files">My menu’s support files<a class="headerlink" href="#my-menus-support-files" title="Permanent link">&para;</a></h2>
 <ul>
-<li>SKSE\Plugins\RisaAllInOneMenu.ini stores Risa’s settings and original-hotkey options.</li>
+<li>SKSE\Plugins\RisaAllInOneMenu.ini stores my menu’s settings and original-hotkey options.</li>
 <li>SKSE\Plugins\RisaAllInOneMenu_OriginalHotkeys.json stores captured values used by Restore for Uninstall and is removed after a successful complete restore.</li>
 <li>Documents\My Games\Skyrim Special Edition\SKSE\RisaAllInOneMenu_FileChanges.log records hotkey file edits and restores when file-change logging is enabled.</li>
 </ul>
