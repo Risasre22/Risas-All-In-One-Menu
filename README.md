@@ -7,27 +7,27 @@ Press **F1** by default to open or close the launcher. **Escape** also closes it
 ## Supported Menus
 
 - [SKSE Menu Framework](https://www.nexusmods.com/skyrimspecialedition/mods/120352)
-- Mod Configuration Menu (MCM)
+- [Mod Configuration Menu (MCM) via SkyUI](https://www.nexusmods.com/skyrimspecialedition/mods/12604)
 - [SearchUI (Get Any Item Instantly)](https://www.nexusmods.com/skyrimspecialedition/mods/101290)
 - [Open Animation Replacer](https://www.nexusmods.com/skyrimspecialedition/mods/92109)
 - [Immersive Equipment Displays](https://www.nexusmods.com/skyrimspecialedition/mods/62001)
 - [Debug Menu](https://www.nexusmods.com/skyrimspecialedition/mods/136456)
 - [dMenu NG](https://www.nexusmods.com/skyrimspecialedition/mods/166751) using the API-enabled compatibility build offered by the FOMOD
 - [Improved Camera SE](https://www.nexusmods.com/skyrimspecialedition/mods/93962) / Improved Camera NG
-- [ENB Editor](http://enbdev.com/download_mod_tesskyrimse.html)
+- ENB Editor
 - [FLICK](https://www.nexusmods.com/skyrimspecialedition/mods/181603)
 - [KreatE](https://www.nexusmods.com/skyrimspecialedition/mods/83757)
 - [Community Shaders](https://www.nexusmods.com/skyrimspecialedition/mods/86492)
 - [Skyrim Party Sheet - Player and Follower HUD](https://www.nexusmods.com/skyrimspecialedition/mods/167538)
 - [Dragonborn's Toolkit](https://www.nexusmods.com/skyrimspecialedition/mods/181426)
 - [CatMenu](https://www.nexusmods.com/skyrimspecialedition/mods/65958)
-- [ReShade](https://reshade.me/)
+- ReShade
 - [Quick Armor Rebalance](https://www.nexusmods.com/skyrimspecialedition/mods/127967)
-- Mod Function Menu
-- Outfit Preview Selector
-- Modex
-- Hotkey Reminder
-- [Skyrim Vanity System](https://github.com/PenguinToast/SkyrimVanitySystem)
+- [Mod Function Menu](https://www.nexusmods.com/skyrimspecialedition/mods/118580)
+- [Outfit Preview Selector](https://www.nexusmods.com/skyrimspecialedition/mods/184943)
+- [Modex](https://www.nexusmods.com/skyrimspecialedition/mods/137877)
+- [Hotkey Reminder](https://www.nexusmods.com/skyrimspecialedition/mods/115853)
+- [Skyrim Vanity System](https://www.nexusmods.com/skyrimspecialedition/mods/175182)
 
 Only integrations detected in the current installation are displayed. See the [Integration Ledger](https://risasre22.github.io/Risas-All-In-One-Menu/integration-ledger/) for the current integration method and reliability level of each supported mod.
 
