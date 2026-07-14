@@ -740,16 +740,16 @@
 <td><span class="gold">✏️</span></td>
 <td></td>
 <td><strong class="perfect">Hotkey Reminder 1.0.7+</strong></td>
-<td><span class="muted">public OpenMenu/CloseMenu/ToggleHotkey API; listener disabled live with no settings edit and restored on exclusion or uninstall; my menu sends Tab to use Save &amp; Exit</span></td>
+<td><span class="muted">public OpenMenu/ToggleHotkey API; listener disabled live with no settings edit and restored on exclusion or uninstall; my menu sends Tab to use Save &amp; Exit because CloseMenu does not close reliably</span></td>
 </tr>
 <tr>
+<td><span class="gold">⚠️</span></td>
 <td></td>
-<td></td>
-<td></td>
-<td>✏️</td>
-<td></td>
-<td>Armor &amp; Cloth / Weapon Transmog</td>
-<td>Not yet added, <span class="muted">message sent waiting for response</span></td>
+<td>💾</td>
+<td><span class="gold">✏️</span></td>
+<td><strong class="blue">F22</strong></td>
+<td>Skyrim Vanity System</td>
+<td><span class="muted">F6 is parked on F22 through settings.json; my menu injects F22 to open or close and restores the captured key on exclusion or uninstall; native menu and hotkey APIs requested</span></td>
 </tr>
 <tr>
 <td><span class="gold">⚠️</span></td>
@@ -767,7 +767,7 @@
 <td></td>
 <td></td>
 <td><strong class="perfect">Outfit Preview Selector</strong></td>
-<td><span class="muted">opens through its mod event; the native hotkey is parked live through its Papyrus property with no file edit and restored on exclusion or uninstall</span></td>
+<td><span class="muted">opens through its Papyrus method and closes through the OPS_CloseMenu mod event, including on Escape; the native hotkey is parked live through its Papyrus property with no file edit and restored on exclusion or uninstall</span></td>
 </tr>
 </tbody>
 </table>

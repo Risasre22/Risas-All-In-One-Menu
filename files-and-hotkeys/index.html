@@ -630,8 +630,8 @@
 <h1 id="files-hotkeys-edited">Files &amp; Hotkeys Edited<a class="headerlink" href="#files-hotkeys-edited" title="Permanent link">&para;</a></h1>
 <p><span class="muted">“Original” means the value my menu captures before managing a mod. Restore for Uninstall returns captured values whenever possible; the listed upstream defaults are used only as fallbacks.</span></p>
 <details class="files-edited">
-<summary>Keys Freed for You — 25 bindings (19 unique keys/chords)</summary>
-<p>If every supported integration is installed, my menu manages <strong>25 default hotkey bindings across 19 mods with native keys</strong>. Those bindings represent <strong>19 unique keys or chords</strong>, because several mods share F1, Home, F6, or End. MCM and Quick Armor Rebalance are also managed, but have no native default hotkey.</p>
+<summary>Keys Freed for You — 26 bindings (19 unique keys/chords)</summary>
+<p>If every supported integration is installed, my menu manages <strong>26 default hotkey bindings across 20 mods with native keys</strong>. Those bindings represent <strong>19 unique keys or chords</strong>, because several mods share F1, Home, F6, or End. MCM and Quick Armor Rebalance are also managed, but have no native default hotkey.</p>
 <ul>
 <li><strong>Mod Configuration Menu (MCM):</strong> None</li>
 <li><strong>SKSE Menu Framework:</strong> F1</li>
@@ -648,6 +648,7 @@
 <li><strong>Immersive Equipment Displays:</strong> Backspace</li>
 <li><strong>Quick Armor Rebalance:</strong> None</li>
 <li><strong>Outfit Preview Selector:</strong> Numpad 1</li>
+<li><strong>Skyrim Vanity System:</strong> F6</li>
 <li><strong>Skyrim Party Sheet:</strong> X (Settings), F6 (Party Sheet), Y (Inspect Card), U (Character Sheet) — 4 bindings</li>
 <li><strong>ENB Editor:</strong> Shift + Enter</li>
 <li><strong>Community Shaders:</strong> End (Main), Shift + End (Editor), F10 (Overlay), Numpad * (Effects) — 4 bindings</li>
@@ -706,6 +707,12 @@
 <span class="gold">Default value:</span> [Controls.Keyboard] iHotkey = 59<br>
 <span class="gold">Changed to:</span> iHotkey = 107 (F20 unpressable parking key). Restart once so the mod reads the value.</p>
 
+<p><strong class="blue">Skyrim Vanity System</strong><br>
+<span class="gold">Path:</span> SKSE\Plugins\SkyrimVanitySystem\settings.json<br>
+<span class="gold">Default key:</span> F6<br>
+<span class="gold">Default value:</span> "toggleKey" = 64<br>
+<span class="gold">Changed to:</span> "toggleKey" = 109 (F22 unpressable parking key). My menu injects F22 to open or close the menu and restores the captured key on exclusion or uninstall.</p>
+
 <p><strong class="blue">Modex</strong><br>
 <span class="gold">Path:</span> Interface\Modex\user\settings.json<br>
 <span class="gold">Default key:</span> Delete<br>
@@ -730,7 +737,7 @@
 <li><strong>dMenu NG:</strong> Home disabled/restored through the v2 API. Stock dMenu without that API is left unmanaged.</li>
 <li><strong>FLICK:</strong> F7 disabled/restored through its hotkey API.</li>
 <li><strong>SearchUI:</strong> F4 parked live on F18 through Papyrus.</li>
-<li><strong>Outfit Preview Selector:</strong> Numpad 1 parked live on F18 through its Papyrus hotkey property; no INI is edited.</li>
+<li><strong>Outfit Preview Selector:</strong> Numpad 1 parked live on F18 through its Papyrus hotkey property; opening uses its Papyrus method and closing uses the <code>OPS_CloseMenu</code> mod event; no INI is edited.</li>
 <li><strong>Hotkey Reminder:</strong> F11 listener disabled/restored through ToggleHotkey(). Its settings INI is read only.</li>
 <li><strong>Skyrim Party Sheet:</strong> X, F6, Y, and U are intercepted live; PartyUserSettings.ini is read only.</li>
 <li><strong>ENB Editor:</strong> Shift + Enter is hidden only from ENB through caller-scoped input handling.</li>
