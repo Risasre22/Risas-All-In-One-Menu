@@ -103,7 +103,7 @@ static void DMenuApiMessageHandler(SKSE::MessagingInterface::Message* msg) {
     SKSE::log::info("dMenu API received via SKSE message (interface v{}).", iface->interfaceVersion);
 }
 
-static constexpr std::string_view kRisaMenuVersion = "1.5.7";
+static constexpr std::string_view kRisaMenuVersion = "1.5.8";
 static std::string g_RuntimeVersion = "Unknown";
 static std::string g_SKSEVersion = "Unknown";
 static std::string g_RuntimeEdition = "Unknown";
@@ -306,6 +306,14 @@ struct ModFunctionMenuConfig {
 };
 static ModFunctionMenuConfig g_ModFunctionMenuConfig;
 
+struct SkyrimVanitySystemConfig {
+    bool enabled = false;
+    WORD toggleDIK = 0x6D; // F22 parking key while managed
+    WORD toggleVK = VK_F22;
+    WORD originalDIK = 0x40; // F6 default
+};
+static SkyrimVanitySystemConfig g_SkyrimVanitySystemConfig;
+
 struct OPSConfig {
     bool enabled = false;
     WORD toggleDIK = 0x4F; // Numpad 1 (Outfit Preview Selector's default Hotkey = 79)
@@ -369,6 +377,7 @@ enum class ActiveMenu {
     SearchUI,
     QAR,
     ModFunctionMenu,
+    SkyrimVanitySystem,
     OPS,
     Modex,
     HotkeyReminder
@@ -395,6 +404,7 @@ static bool MenuIgnoresOSCursor(ActiveMenu am) {
         case ActiveMenu::ReShade:
         case ActiveMenu::QAR:
         case ActiveMenu::ModFunctionMenu:
+        case ActiveMenu::SkyrimVanitySystem:
             return true;
         default:
             return false;
@@ -1638,6 +1648,27 @@ static void LoadModFunctionMenuConfig() {
         hotkey, g_ModFunctionMenuConfig.toggleDIK, g_ModFunctionMenuConfig.toggleVK);
 }
 
+static void LoadSkyrimVanitySystemConfig() {
+    g_SkyrimVanitySystemConfig.enabled = IsPluginPresent("SkyrimVanitySystem");
+    if (!g_SkyrimVanitySystemConfig.enabled) return;
+    const std::filesystem::path settings = "Data/SKSE/Plugins/SkyrimVanitySystem/settings.json";
+    if (std::filesystem::exists(settings)) {
+        try {
+            std::ifstream input(settings);
+            const auto data = nlohmann::json::parse(input);
+            const int key = data.value("toggleKey", 0x40);
+            if (key > 0 && key < 256 && key != 0x6D)
+                g_SkyrimVanitySystemConfig.originalDIK = static_cast<WORD>(key);
+        } catch (...) {
+            SKSE::log::warn("LoadSkyrimVanitySystemConfig: failed to read settings.json; using F6 as original.");
+        }
+    }
+    g_SkyrimVanitySystemConfig.toggleDIK = 0x6D;
+    g_SkyrimVanitySystemConfig.toggleVK = VK_F22;
+    SKSE::log::info("LoadSkyrimVanitySystemConfig: enabled=true, original={}, parking=F22.",
+        NameFromDIK(g_SkyrimVanitySystemConfig.originalDIK));
+}
+
 static void LoadCatMenuConfig() {
     g_CatMenuConfig.enabled = IsPluginPresent("catmenu");
     if (!g_CatMenuConfig.enabled) return;
@@ -1817,6 +1848,7 @@ static std::atomic<bool> g_UnblockSearchUI{ false };// ON = user's key opens Sea
 static std::atomic<bool> g_UnblockMCM{ false };     // ON = user's key opens MCM; OFF = key freed, button still opens
 static std::atomic<bool> g_UnblockQAR{ false };     // ON = user's key opens QAR; OFF = key freed, button still opens
 static std::atomic<bool> g_UnblockModFunctionMenu{ false }; // ON = user's key opens Mod Function Menu; OFF = key freed, button still opens
+static std::atomic<bool> g_UnblockSkyrimVanitySystem{ false }; // ON = user's original alias opens SVS; native listener remains parked
 static std::atomic<bool> g_UnblockOPS{ false };     // ON = user's key opens Outfit Preview Selector; OFF = key freed, button still opens
 static std::atomic<bool> g_UnblockModex{ false };   // ON = user's key opens Modex; OFF = key freed, button still opens
 static std::atomic<bool> g_UnblockHotkeyReminder{ false }; // ON = Risa bridges F11; native listener remains keyless
@@ -1836,7 +1868,7 @@ static std::atomic<WORD> g_PartySheetDispatchModifierDIK{ 0 };
 // chordDown[] array in PollOriginalHotkeyAliases.
 // Indices 0..AI_Dragonborn are the chordDown[] watcher mods. AI_ReShade (raw-input bridge) and
 // AI_MF (own bridge below) are rebindable too but handled outside the chordDown loop.
-enum AliasIdx { AI_OAR = 0, AI_IED, AI_ENB, AI_DMenu, AI_IC, AI_FLICK, AI_DebugMenu, AI_KreatE, AI_CS, AI_CatMenu, AI_Dragonborn, AI_ReShade, AI_MF, AI_CSEditor, AI_CSOverlay, AI_CSEffect, AI_PartySettings, AI_PartySheet, AI_PartyInspect, AI_PartyCharacter, AI_SearchUI, AI_MCM, AI_QAR, AI_ModFunctionMenu, AI_OPS, AI_Modex, AI_HotkeyReminder, AI_COUNT };
+enum AliasIdx { AI_OAR = 0, AI_IED, AI_ENB, AI_DMenu, AI_IC, AI_FLICK, AI_DebugMenu, AI_KreatE, AI_CS, AI_CatMenu, AI_Dragonborn, AI_ReShade, AI_MF, AI_CSEditor, AI_CSOverlay, AI_CSEffect, AI_PartySettings, AI_PartySheet, AI_PartyInspect, AI_PartyCharacter, AI_SearchUI, AI_MCM, AI_QAR, AI_ModFunctionMenu, AI_SkyrimVanitySystem, AI_OPS, AI_Modex, AI_HotkeyReminder, AI_COUNT };
 static std::atomic<WORD> g_AliasDik[AI_COUNT];
 static std::atomic<bool> g_AliasCtrl[AI_COUNT];
 static std::atomic<bool> g_AliasShift[AI_COUNT];
@@ -1850,7 +1882,7 @@ static std::string g_ExclusionsDetailText = "";
 static int g_ExclusionStep = 0;
 static const char* const g_AliasIds[AI_COUNT] = {
     "OAR", "IED", "ENB", "dMenu", "ImprovedCamera", "FLICK", "DebugMenu", "KreatE", "CS", "CatMenu", "Dragonborn", "ReShade", "MF",
-    "CSEditor", "CSOverlay", "CSEffect", "PartySettings", "PartySheet", "PartyInspect", "PartyCharacter", "SearchUI", "MCM", "QAR", "ModFunctionMenu", "OPS", "Modex", "HotkeyReminder"
+    "CSEditor", "CSOverlay", "CSEffect", "PartySettings", "PartySheet", "PartyInspect", "PartyCharacter", "SearchUI", "MCM", "QAR", "ModFunctionMenu", "SkyrimVanitySystem", "OPS", "Modex", "HotkeyReminder"
 };
 static std::atomic<bool>* const g_AliasUnblock[AI_COUNT] = {
     &g_UnblockOAR, &g_UnblockIED, &g_UnblockENB, &g_UnblockDMenu, &g_UnblockImprovedCamera,
@@ -1858,7 +1890,7 @@ static std::atomic<bool>* const g_AliasUnblock[AI_COUNT] = {
     &g_UnblockDragonborn, &g_UnblockReShade, &g_UnblockMF,
     &g_UnblockCSEditor, &g_UnblockCSOverlay, &g_UnblockCSEffect,
     &g_UnblockPartySettings, &g_UnblockPartySheet, &g_UnblockPartyInspect, &g_UnblockPartyCharacter,
-    &g_UnblockSearchUI, &g_UnblockMCM, &g_UnblockQAR, &g_UnblockModFunctionMenu, &g_UnblockOPS, &g_UnblockModex, &g_UnblockHotkeyReminder
+    &g_UnblockSearchUI, &g_UnblockMCM, &g_UnblockQAR, &g_UnblockModFunctionMenu, &g_UnblockSkyrimVanitySystem, &g_UnblockOPS, &g_UnblockModex, &g_UnblockHotkeyReminder
 };
 static std::atomic<int> g_CapturingAlias{ -1 }; // which alias row is in "press a key" capture (-1 = none)
 static std::atomic<long long> g_KeyCaptureStartedMs{ 0 }; // when the key capturing was started (for 3s timeout)
@@ -1924,6 +1956,7 @@ static void InitAliasDefaults() {
     set(AI_MCM, 0x00, false, false, false);            // none until the user picks one
     set(AI_QAR, 0x00, false, false, false);            // none until the user picks one
     set(AI_ModFunctionMenu, 0x3B, false, false, false); // F1 (Mod Function Menu's own default)
+    set(AI_SkyrimVanitySystem, 0x40, false, false, false); // F6 (SVS default)
     set(AI_OPS, 0x4F, false, false, false);            // Numpad 1 (Outfit Preview Selector's own default)
     set(AI_Modex, 0xD3, false, false, false);          // Delete (Modex's own default)
     set(AI_HotkeyReminder, 0x57, false, false, false); // F11 (Hotkey Reminder default)
@@ -1960,6 +1993,7 @@ static void RestoreAliasToDefault(int idx) {
         case AI_MCM: set(AI_MCM, 0x00, false, false, false); break;
         case AI_QAR: set(AI_QAR, 0x00, false, false, false); break;
         case AI_ModFunctionMenu: set(AI_ModFunctionMenu, 0x3B, false, false, false); break;
+        case AI_SkyrimVanitySystem: set(AI_SkyrimVanitySystem, 0x40, false, false, false); break;
         case AI_OPS: set(AI_OPS, 0x4F, false, false, false); break;
         case AI_Modex: set(AI_Modex, 0xD3, false, false, false); break;
         case AI_HotkeyReminder: set(AI_HotkeyReminder, 0x57, false, false, false); break;
@@ -1992,12 +2026,12 @@ static bool IsRebinding() {
 }
 
 static std::vector<std::string> g_ButtonOrder = {
-    "MF", "MCM", "SearchUI", "OAR", "IED", "DebugMenu", "dMenu", "ImprovedCamera", "ENB", "FLICK", "KreatE", "CS", "PartySheet", "CatMenu", "Dragonborn", "ReShade", "QAR", "ModFunctionMenu", "OPS"
+    "MF", "MCM", "SearchUI", "OAR", "IED", "DebugMenu", "dMenu", "ImprovedCamera", "ENB", "FLICK", "KreatE", "CS", "PartySheet", "CatMenu", "Dragonborn", "ReShade", "QAR", "ModFunctionMenu", "SkyrimVanitySystem", "OPS"
 };
 // Every launcher button id that should exist in the order. On load we append any missing from a
 // user's saved order so newly added buttons (e.g. QAR) still show up for existing installs.
 static const std::vector<std::string> kAllButtonIds = {
-    "MF", "MCM", "SearchUI", "OAR", "IED", "DebugMenu", "dMenu", "ImprovedCamera", "ENB", "FLICK", "KreatE", "CS", "PartySheet", "CatMenu", "Dragonborn", "ReShade", "QAR", "ModFunctionMenu", "OPS", "Modex", "HotkeyReminder"
+    "MF", "MCM", "SearchUI", "OAR", "IED", "DebugMenu", "dMenu", "ImprovedCamera", "ENB", "FLICK", "KreatE", "CS", "PartySheet", "CatMenu", "Dragonborn", "ReShade", "QAR", "ModFunctionMenu", "SkyrimVanitySystem", "OPS", "Modex", "HotkeyReminder"
 };
 
 static void SaveButtonOrder() {
@@ -2322,6 +2356,7 @@ static bool EscBlockedForActiveMenu() {
     case ActiveMenu::KreatE:
     case ActiveMenu::Dragonborn:
     case ActiveMenu::CatMenu:
+    case ActiveMenu::SkyrimVanitySystem:
     case ActiveMenu::DMenu:  // stock dMenu / dMenu NG leak ESC to the game (vanilla menu) when we close
                              // them; strip ESC from the game while open. v2 "Risa dmenu" is unaffected.
         return true;
@@ -2357,6 +2392,8 @@ static std::atomic<bool> g_CatMenuIniManaged{ false };
 static std::atomic<long long> g_LastCatMenuIniAttemptMs{ 0 };
 static std::atomic<bool> g_ModFunctionMenuIniManaged{ false };
 static std::atomic<long long> g_LastModFunctionMenuIniAttemptMs{ 0 };
+static std::atomic<bool> g_SkyrimVanitySystemSettingsManaged{ false };
+static std::atomic<long long> g_LastSkyrimVanitySystemSettingsAttemptMs{ 0 };
 static std::atomic<bool> g_OPSKeyManaged{ false };
 static std::atomic<long long> g_LastOPSKeyAttemptMs{ 0 };
 
@@ -2443,6 +2480,9 @@ static bool IsQARInstalled();
 static void OpenModFunctionMenu();
 static void LoadModFunctionMenuConfig();
 static void TryManageModFunctionMenuHotkey(bool lateRetry = false);
+static void OpenSkyrimVanitySystem();
+static void LoadSkyrimVanitySystemConfig();
+static void TryManageSkyrimVanitySystemHotkey(bool lateRetry = false);
 static void OpenOPS();
 static bool IsOPSInstalled();
 static void LoadOPSConfig();
@@ -2910,6 +2950,13 @@ static void CloseActiveModMenu(ActiveMenu active) {
         }).detach();
         SKSE::log::info("CloseActiveModMenu: scheduled Mod Function Menu close with {} after handoff.",
             NameFromDIK(toggleDIK));
+    } else if (active == ActiveMenu::SkyrimVanitySystem) {
+        const WORD toggleDIK = g_SkyrimVanitySystemConfig.toggleDIK;
+        std::thread([toggleDIK]() {
+            std::this_thread::sleep_for(std::chrono::milliseconds(80));
+            InjectEngineKey(toggleDIK);
+        }).detach();
+        SKSE::log::info("CloseActiveModMenu: scheduled Skyrim Vanity System close with F22.");
     } else if (active == ActiveMenu::OPS) {
         SendOPSModEvent("OPS_CloseMenu");
         SKSE::log::info("CloseActiveModMenu: closed Outfit Preview Selector via ModEvent OPS_CloseMenu.");
@@ -3660,6 +3707,7 @@ static void HookedKbProcess(RE::BSWin32KeyboardDevice* self, float a_dt) {
                                            || escMenu == ActiveMenu::FLICK
                                            || escMenu == ActiveMenu::DebugMenu
                                            || escMenu == ActiveMenu::SearchUI
+                                           || escMenu == ActiveMenu::OPS
                                            || escMenu == ActiveMenu::Modex
                                            || escMenu == ActiveMenu::HotkeyReminder;
                 if (explicitClose) {
@@ -4098,6 +4146,28 @@ static void PollOriginalHotkeyAliases(const BYTE* state) {
                     !IsExternalMenuOpen() && !IsENBOpeningTransition() &&
                     now >= g_MenuOpenLockUntilMs.load()) {
                     OpenModFunctionMenu();
+                }
+            }
+        }
+    }
+
+    // MCM: has no native key of its own, so bridge its alias here to open the Journal/MCM.
+    {
+        const bool svsChord = g_UnblockSkyrimVanitySystem.load() &&
+            g_SkyrimVanitySystemConfig.enabled &&
+            !AliasEqualsLauncher(AI_SkyrimVanitySystem) &&
+            aliasDown(AI_SkyrimVanitySystem);
+        if (CheckAliasTrigger(AI_SkyrimVanitySystem, svsChord)) {
+            const long long now = NowMs();
+            const long long last = g_LastOriginalHotkeyMs.exchange(now);
+            if (now - last > 500) {
+                const auto active = g_ActiveMenu.load();
+                if (active == ActiveMenu::SkyrimVanitySystem) {
+                    CloseActiveModMenu(active);
+                } else if (active == ActiveMenu::None &&
+                    !(g_LauncherWindow && g_LauncherWindow->IsOpen.load()) &&
+                    !IsExternalMenuOpen() && now >= g_MenuOpenLockUntilMs.load()) {
+                    OpenSkyrimVanitySystem();
                 }
             }
         }
@@ -5944,6 +6014,30 @@ static void OpenModFunctionMenu() {
     OpenModFunctionMenu("button");
 }
 
+static void OpenSkyrimVanitySystem() {
+    if (!g_SkyrimVanitySystemConfig.enabled) {
+        SKSE::log::warn("OpenSkyrimVanitySystem: Skyrim Vanity System is not available.");
+        return;
+    }
+    if (g_ActiveMenu.load() == ActiveMenu::SkyrimVanitySystem) {
+        CloseLauncher();
+        CloseActiveModMenu(ActiveMenu::SkyrimVanitySystem);
+        g_LastLauncherToggleMs.store(NowMs());
+        return;
+    }
+    CloseLauncher();
+    g_LastLauncherToggleMs.store(NowMs());
+    g_ActiveMenu.store(ActiveMenu::SkyrimVanitySystem);
+    g_MenuOpenLockUntilMs.store(NowMs() + 350);
+    std::thread([]() {
+        std::this_thread::sleep_for(std::chrono::milliseconds(80));
+        if (g_ActiveMenu.load() != ActiveMenu::SkyrimVanitySystem) return;
+        g_LastLauncherToggleMs.store(NowMs());
+        InjectEngineKey(g_SkyrimVanitySystemConfig.toggleDIK);
+        SKSE::log::info("OpenSkyrimVanitySystem: injected F22 through the engine input queue.");
+    }).detach();
+}
+
 static void OpenOPS() {
     if (!g_OPSConfig.enabled) {
         SKSE::log::warn("OpenOPS: Outfit Preview Selector is not available.");
@@ -7661,6 +7755,7 @@ static void __stdcall RenderLauncher() {
     const bool hasSearchUI = IsSearchUIAvailable();
     const bool hasQAR = IsQARInstalled();
     const bool hasModFunctionMenu = g_ModFunctionMenuConfig.enabled;
+    const bool hasSkyrimVanitySystem = g_SkyrimVanitySystemConfig.enabled;
     const bool hasOPS = g_OPSConfig.enabled || IsOPSInstalled();
     if (hasOPS && !g_OPSConfig.enabled) {
         LoadOPSConfig();
@@ -7704,6 +7799,7 @@ static void __stdcall RenderLauncher() {
     allButtons.push_back({ "ReShade", FontAwesome::UnicodeToUtf8(0xf5aa), Tr("mod.reshade", "ReShade"), OpenReShade, hasReShade });
     allButtons.push_back({ "QAR", FontAwesome::UnicodeToUtf8(0xf553), Tr("mod.quick_armor_rebalance", "Quick Armor Rebalance"), OpenQAR, hasQAR });
     allButtons.push_back({ "ModFunctionMenu", FontAwesome::UnicodeToUtf8(0xf0ae), Tr("mod.mod_function_menu", "Mod Function Menu"), OpenModFunctionMenu, hasModFunctionMenu });
+    allButtons.push_back({ "SkyrimVanitySystem", FontAwesome::UnicodeToUtf8(0xf530), Tr("mod.skyrim_vanity_system", "Skyrim Vanity System"), OpenSkyrimVanitySystem, hasSkyrimVanitySystem });
     allButtons.push_back({ "OPS", FontAwesome::UnicodeToUtf8(0xf508), Tr("mod.outfit_preview_selector", "Outfit Preview Selector"), OpenOPS, hasOPS });
     allButtons.push_back({ "Modex", FontAwesome::UnicodeToUtf8(0xf07c), Tr("mod.modex", "Modex"), OpenModex, hasModex });
     allButtons.push_back({ "HotkeyReminder", FontAwesome::UnicodeToUtf8(0xf11c), Tr("mod.hotkey_reminder", "Hotkey Reminder"), OpenHotkeyReminder, hasHotkeyReminder });
@@ -7868,6 +7964,7 @@ static void __stdcall RenderLauncher() {
                                      buttons[i].id == "ENB" ||
                                      buttons[i].id == "QAR" ||
                                      buttons[i].id == "ModFunctionMenu" ||
+                                     buttons[i].id == "SkyrimVanitySystem" ||
                                      buttons[i].id == "OPS" ||
                                      buttons[i].id == "PartySheet") && !IsGameLoaded();
                     // These menus can't be driven while the console is open, so grey them out then.
@@ -7875,6 +7972,7 @@ static void __stdcall RenderLauncher() {
                                         buttons[i].id == "ImprovedCamera" || buttons[i].id == "KreatE" ||
                                         buttons[i].id == "PartySheet" || buttons[i].id == "CatMenu" ||
                                         buttons[i].id == "QAR" || buttons[i].id == "ModFunctionMenu" ||
+                                        buttons[i].id == "SkyrimVanitySystem" ||
                                         buttons[i].id == "OPS" || buttons[i].id == "Dragonborn")) {
                         disabled = true;
                     }
@@ -8514,6 +8612,8 @@ static void __stdcall RenderLauncher() {
             const std::string opsTooltip = MakeTooltip("Numpad 1",
                 "Numpad 1 (kept - opens from the launcher too; its key doesn't clash)");
             const std::string modexTooltip = MakeTooltip("DELETE", apiKey(AI_Modex, g_ModexConfig.toggleDIK));
+            const std::string svsTooltip = MakeTooltip("F6", keyOrExcluded(AI_SkyrimVanitySystem,
+                g_SkyrimVanitySystemConfig.toggleDIK, "F22"));
             const std::string hotkeyReminderTooltip = MakeTooltip("F11", apiKey(AI_HotkeyReminder, 0x57));
 
             std::string enbHotkey;
@@ -8571,7 +8671,7 @@ static void __stdcall RenderLauncher() {
             const std::string& dragonbornDisabledReason = launcherClashReason;
 
             const bool anyMenusTools = hasMF || hasDMenu || hasFLICK || hasCatMenu || hasDragonborn || hasDebugMenu || hasSearchUI || hasMCM || hasModFunctionMenu || hasModex || hasHotkeyReminder;
-            const bool anyAnimGear   = hasOAR || hasIED || hasPartySheet || hasQAR || hasOPS;
+            const bool anyAnimGear   = hasOAR || hasIED || hasPartySheet || hasQAR || hasOPS || hasSkyrimVanitySystem;
             const bool anyGraphics   = hasENB || hasCS || hasImprovedCamera || hasReShade || hasKreatE;
 
             if (anyMenusTools && BeginCategory(Tr("settings.category.menus_tools", "Menus & Tools"))) {
@@ -8632,6 +8732,9 @@ static void __stdcall RenderLauncher() {
                 });
                 DrawOriginalHotkeyRow("OPS", Tr("mod.outfit_preview_selector", "Outfit Preview Selector"), "Numpad 1", opsTooltip, "", AI_OPS, g_UnblockOPS, hasOPS, true, nullptr, false, []() {
                     OpenOPS();
+                });
+                DrawOriginalHotkeyRow("SkyrimVanitySystem", Tr("mod.skyrim_vanity_system", "Skyrim Vanity System"), "F6", svsTooltip, "", AI_SkyrimVanitySystem, g_UnblockSkyrimVanitySystem, hasSkyrimVanitySystem, true, nullptr, false, []() {
+                    OpenSkyrimVanitySystem();
                 });
                 DrawOriginalHotkeyRow("PartySettings", Tr("mod.skyrim_party_sheet", "Skyrim Party Sheet"), "X", partySettingsTip, "",
                     AI_PartySettings, g_UnblockPartySettings, hasPartySheet, true, &s_partySheetExpanded, false, []() {
@@ -9622,6 +9725,29 @@ static void OpenModex() {
     SKSE::log::info("OpenModex: opened Modex through its native API.");
 }
 
+static void TryManageSkyrimVanitySystemHotkey(bool lateRetry) {
+    if (g_ExcludeMod[AI_SkyrimVanitySystem].load()) return;
+    if (g_SkyrimVanitySystemSettingsManaged.load() || !IsPluginPresent("SkyrimVanitySystem")) return;
+    const long long now = NowMs();
+    if (lateRetry) {
+        const long long last = g_LastSkyrimVanitySystemSettingsAttemptMs.exchange(now);
+        if (now - last < 2000) return;
+    }
+    constexpr int kParkKey = 0x6D; // F22, reserved for the temporary SVS compatibility bridge
+    const std::filesystem::path settings = "Data/SKSE/Plugins/SkyrimVanitySystem/settings.json";
+    const int result = SetJsonRootValue(settings, "toggleKey", kParkKey);
+    if (result < 0) return;
+    g_SkyrimVanitySystemConfig.toggleDIK = kParkKey;
+    g_SkyrimVanitySystemConfig.toggleVK = VK_F22;
+    g_SkyrimVanitySystemSettingsManaged.store(true);
+    if (result == 1) {
+        MarkConfigRestartRequired("Skyrim Vanity System hotkey");
+        SKSE::log::info("TryManageSkyrimVanitySystemHotkey: native hotkey parked on F22; restart required.");
+    } else {
+        SKSE::log::info("TryManageSkyrimVanitySystemHotkey: native hotkey is already parked on F22.");
+    }
+}
+
 static bool SetHotkeyReminderHotkeyEnabled(bool enabled) {
     if (!IsHotkeyReminderInstalled()) return false;
     auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
@@ -10133,6 +10259,11 @@ static void CaptureOriginalHotkeys() {
         else
             CaptureOriginal("ModFunctionMenu.iHotkey", nlohmann::json(mfmKey), 59);
     }
+    const auto svsKey = ReadJsonValue("Data/SKSE/Plugins/SkyrimVanitySystem/settings.json", "", "toggleKey");
+    if (svsKey == nlohmann::json(0x6D))
+        SKSE::log::warn("HotkeyBackup: SKIP SkyrimVanitySystem.toggleKey = 109 (our F22 parking key).");
+    else
+        CaptureOriginal("SkyrimVanitySystem.toggleKey", svsKey, 0x40);
     // Dragonborn's Toolkit (JSON root toggleKey, normally a string like "F1"). Disabled = int 0.
     const auto dragonbornKey = ReadJsonValue("Data/SKSE/Plugins/SkyrimCheatMenu.json", "", "toggleKey");
     if (legacyRelocations && dragonbornKey == nlohmann::json(108))
@@ -10301,6 +10432,7 @@ static bool IsModInstalled(int aliasIdx) {
         case AI_ReShade:   return g_ReShadeConfig.enabled;
         case AI_QAR:       return IsQARInstalled();
         case AI_ModFunctionMenu: return g_ModFunctionMenuConfig.enabled;
+        case AI_SkyrimVanitySystem: return g_SkyrimVanitySystemConfig.enabled;
         case AI_OPS:       return g_OPSConfig.enabled;
         case AI_Modex:     return g_ModexConfig.enabled;
         case AI_HotkeyReminder: return IsHotkeyReminderInstalled();
@@ -10329,6 +10461,7 @@ static const char* GetModDisplayName(int aliasIdx) {
         case AI_PartySettings: return "Skyrim Party Sheet";
         case AI_QAR:           return "Quick Armor Rebalance";
         case AI_ModFunctionMenu: return "Mod Function Menu";
+        case AI_SkyrimVanitySystem: return "Skyrim Vanity System";
         case AI_OPS:           return "Outfit Preview Selector";
         case AI_Modex:         return "Modex";
         case AI_HotkeyReminder:return "Hotkey Reminder";
@@ -10368,6 +10501,8 @@ static std::string GetModNativeHotkeyString(int aliasIdx) {
             return FormatHotkey(g_CatMenuConfig.toggleDIK);
         case AI_ModFunctionMenu:
             return FormatHotkey(g_ModFunctionMenuConfig.toggleDIK);
+        case AI_SkyrimVanitySystem:
+            return FormatHotkey(g_SkyrimVanitySystemConfig.toggleDIK);
         case AI_OPS:
             return FormatHotkey(g_OPSConfig.toggleDIK);
         case AI_Modex:
@@ -10466,6 +10601,11 @@ static std::string GetExclusionDetailString(int aliasIdx) {
                    "Default key: F1\n"
                    "Default value: [Controls.Keyboard] iHotkey = 59\n"
                    "Changed to: iHotkey = F20 (unpressable)\n";
+        case AI_SkyrimVanitySystem:
+            return "Path: SKSE\\Plugins\\SkyrimVanitySystem\\settings.json\n"
+                   "Default key: F6\n"
+                   "Default value: \"toggleKey\": 64\n"
+                   "Changed to: \"toggleKey\": 109 (F22 parking key)\n";
         case AI_OPS:
             return "Path: None (MCM Hotkey property on the OutfitPreviewSe script, in the save)\n"
                    "Default key: Numpad 1\n"
@@ -10512,6 +10652,7 @@ static WORD GetModNativeKey(int aliasIdx) {
         case AI_KreatE:    return g_KreatEConfig.toggleDIK;
         case AI_CatMenu:   return g_CatMenuConfig.toggleDIK;
         case AI_ModFunctionMenu: return g_ModFunctionMenuConfig.toggleDIK;
+        case AI_SkyrimVanitySystem: return g_SkyrimVanitySystemConfig.toggleDIK;
         case AI_OPS:       return g_OPSConfig.toggleDIK;
         case AI_Dragonborn:return g_DragonbornConfig.toggleDIK;
         case AI_CS:        return g_CSConfig.toggleDIK;
@@ -10543,6 +10684,7 @@ static std::string GetBackupKeyString(int aliasIdx, bool forceModDefaults) {
         case AI_KreatE:    backupId = "KreatE.GUIToggleKeys";      modDefaultVal = VK_END; break;
         case AI_CatMenu:   backupId = "CatMenu.toggle_key";        modDefaultVal = 577;  break; // ImGui F6
         case AI_ModFunctionMenu: backupId = "ModFunctionMenu.iHotkey"; modDefaultVal = 59; break; // F1
+        case AI_SkyrimVanitySystem: backupId = "SkyrimVanitySystem.toggleKey"; modDefaultVal = 0x40; break; // F6
         case AI_OPS:       backupId = "OPS.Hotkey";                modDefaultVal = 79;   break; // Numpad 1
         case AI_Dragonborn:backupId = "Dragonborn.toggleKey";      modDefaultVal = "F1"; break;
         case AI_ReShade:   backupId = "ReShade.KeyOverlay";        modDefaultVal = "36,0,0,0"; break; // Home
@@ -10721,6 +10863,15 @@ static bool RestoreModDefaults(int aliasIdx, bool forceModDefaults) {
                 const nlohmann::json v = fromBak ? o : nlohmann::json(211); // Delete
                 const int r = SetJsonRootValue("Data/Interface/Modex/user/settings.json", "Open Menu Keybind", v);
                 track("Data/Interface/Modex/user/settings.json", r);
+            }
+            break;
+        case AI_SkyrimVanitySystem:
+            {
+                nlohmann::json o = GetOriginal("SkyrimVanitySystem.toggleKey");
+                const bool fromBak = !forceModDefaults && o.is_number_integer();
+                const nlohmann::json v = fromBak ? o : nlohmann::json(0x40);
+                const int r = SetJsonRootValue("Data/SKSE/Plugins/SkyrimVanitySystem/settings.json", "toggleKey", v);
+                track("Data/SKSE/Plugins/SkyrimVanitySystem/settings.json", r);
             }
             break;
         case AI_HotkeyReminder:
@@ -10930,6 +11081,14 @@ static bool RestoreAllModDefaults(bool forceModDefaults) {
         SKSE::log::info("Restore[{}] ModFunctionMenu iHotkey = {}", fromBak ? "BACKUP" : "default", v);
     }
     {
+        nlohmann::json o = GetOriginal("SkyrimVanitySystem.toggleKey");
+        const bool fromBak = !forceModDefaults && o.is_number_integer();
+        const nlohmann::json v = fromBak ? o : nlohmann::json(0x40); // F6
+        const int r = SetJsonRootValue("Data/SKSE/Plugins/SkyrimVanitySystem/settings.json", "toggleKey", v);
+        track("Data/SKSE/Plugins/SkyrimVanitySystem/settings.json", r);
+        SKSE::log::info("Restore[{}] Skyrim Vanity System toggleKey = {}", fromBak ? "BACKUP" : "default", v.dump());
+    }
+    {
         nlohmann::json o = GetOriginal("OPS.Hotkey");
         const bool fromBak = !forceModDefaults && o.is_number_integer();
         const int v = fromBak ? o.get<int>() : 79; // Numpad 1
@@ -11081,6 +11240,7 @@ static void MessageHandler(SKSE::MessagingInterface::Message* msg) {
         LoadPartySheetConfig();
         LoadCatMenuConfig();
         LoadModFunctionMenuConfig();
+        LoadSkyrimVanitySystemConfig();
         LoadOPSConfig();
         LoadDragonbornConfig();
         LoadReShadeConfig();
@@ -11089,6 +11249,7 @@ static void MessageHandler(SKSE::MessagingInterface::Message* msg) {
         TryManageCSHotkey();
         TryManageCatMenuHotkey();
         TryManageModFunctionMenuHotkey();
+        TryManageSkyrimVanitySystemHotkey();
         TryManageFLICKHotkey();
         TryManageOPSHotkey();
         TryManageDragonbornHotkey();

@@ -1,6 +1,16 @@
 RISA'S ALL IN ONE MENU - CHANGELOG
 ===================================
 
+1.5.8
+-----
+NEW:
+- Added support for Skyrim Vanity System
+
+FIXED:
+- Fixed Skyrim Vanity System requiring Escape twice to close.
+- Fixed Outfit Preview Selector not closing with Escape.
+
+
 1.5.7
 -----
 HOTFIX:

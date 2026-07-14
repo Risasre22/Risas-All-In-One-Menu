@@ -27,6 +27,7 @@ Press **F1** by default to open or close the launcher. **Escape** also closes it
 - Outfit Preview Selector
 - Modex
 - Hotkey Reminder
+- [Skyrim Vanity System](https://github.com/PenguinToast/SkyrimVanitySystem)
 
 Only integrations detected in the current installation are displayed. See the [Integration Ledger](https://risasre22.github.io/Risas-All-In-One-Menu/integration-ledger/) for the current integration method and reliability level of each supported mod.
 
