@@ -8,7 +8,7 @@ endif()
 
 set(VCPKG_TARGET_TRIPLET "x64-windows-static-md" CACHE STRING "vcpkg target triplet")
 
-project(RisaAllInOneMenu VERSION 1.5.6 LANGUAGES CXX)
+project(RisaAllInOneMenu VERSION 1.5.7 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -56,7 +56,7 @@ find_package(spdlog CONFIG REQUIRED)
 find_package(minhook CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 
-add_library(${PROJECT_NAME} SHARED src/main.cpp src/reshade_addon.cpp)
+add_library(${PROJECT_NAME} SHARED src/main.cpp src/ModexAPI.cpp src/reshade_addon.cpp)
 
 target_include_directories(${PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
 

@@ -3,6 +3,15 @@ RISA'S ALL IN ONE MENU - CHANGELOG
 Newest first. "In progress" = built/deployed locally but not yet released.
 Claude keeps this file up to date automatically as changes are made.
 
+1.5.7
+-----
+HOTFIX:
+- Fixed Modex not opening from my menu by using its official native API.
+- Fixed Modex not closing when pressing the launcher key or Escape once.
+- Fixed Modex's Delete hotkey remaining active when its original hotkey was disabled.
+- Fixed a crash caused by the previous Modex menu-opening method.
+
+
 1.5.6
 -----
 NEW:

@@ -54,6 +54,7 @@
 #include <initializer_list>
 #include "dmenu_api.h"
 #include "DragonbornsToolkitAPI.h"
+#include "ModexAPI.h"
 
 // ============================================================================
 // dMenu NG external-control API (optional).
@@ -102,7 +103,7 @@ static void DMenuApiMessageHandler(SKSE::MessagingInterface::Message* msg) {
     SKSE::log::info("dMenu API received via SKSE message (interface v{}).", iface->interfaceVersion);
 }
 
-static constexpr std::string_view kRisaMenuVersion = "1.5.6";
+static constexpr std::string_view kRisaMenuVersion = "1.5.7";
 static std::string g_RuntimeVersion = "Unknown";
 static std::string g_SKSEVersion = "Unknown";
 static std::string g_RuntimeEdition = "Unknown";
@@ -1496,9 +1497,24 @@ static bool IsOPSMenuOpen() {
     return ui && ui->IsMenuOpen("CustomMenu");
 }
 
+static constexpr auto kModexMenuName = "ModexGUIMenu";
+
 static bool IsModexMenuOpen() {
+    if (auto* api = ModexAPI::GetModexInterface001()) {
+        return api->IsMenuOpen();
+    }
     auto* ui = RE::UI::GetSingleton();
-    return ui && (ui->IsMenuOpen("Modex") || ui->IsMenuOpen("ModExplorerMenu"));
+    return ui && ui->IsMenuOpen(kModexMenuName);
+}
+
+static bool CloseModexMenu() {
+    // Modex 3.0's native CloseMenu() mistakenly queues its open path instead of hiding the
+    // registered menu. Queue the same kHide message used by Modex's own UIManager::Close().
+    if (auto* queue = RE::UIMessageQueue::GetSingleton()) {
+        queue->AddMessage(kModexMenuName, RE::UI_MESSAGE_TYPE::kHide, nullptr);
+        return true;
+    }
+    return false;
 }
 
 static bool GetOPSObject(RE::BSScript::Internal::VirtualMachine* vm,
@@ -1580,11 +1596,13 @@ static void LoadOPSConfig() {
 }
 
 static void LoadModexConfig() {
-    g_ModexConfig.enabled = IsModexInstalled();
+    const bool installed = IsModexInstalled();
+    auto* api = installed ? ModexAPI::GetModexInterface001() : nullptr;
+    g_ModexConfig.enabled = installed && api;
     if (!g_ModexConfig.enabled) return;
     g_ModexConfig.toggleDIK = 0xD3; // Delete
     g_ModexConfig.toggleVK = VK_DELETE;
-    SKSE::log::info("LoadModexConfig: enabled=true (Modex detected).");
+    SKSE::log::info("LoadModexConfig: enabled=true (Modex native API acquired).");
 }
 
 // Read Mod Function Menu's current [Controls.Keyboard] iHotkey (a DirectInput scancode) from its TOML.
@@ -2896,13 +2914,10 @@ static void CloseActiveModMenu(ActiveMenu active) {
         SendOPSModEvent("OPS_CloseMenu");
         SKSE::log::info("CloseActiveModMenu: closed Outfit Preview Selector via ModEvent OPS_CloseMenu.");
     } else if (active == ActiveMenu::Modex) {
-        auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
-        if (vm && vm->TypeIsValid("Modex")) {
-            RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> cb;
-            vm->DispatchStaticCall("Modex", "CloseMenu", RE::MakeFunctionArguments(), cb);
-            SKSE::log::info("CloseActiveModMenu: closed Modex via Modex.CloseMenu().");
+        if (CloseModexMenu()) {
+            SKSE::log::info("CloseActiveModMenu: queued ModexGUIMenu hide through Skyrim's UI queue.");
         } else {
-            SKSE::log::info("CloseActiveModMenu: Modex not registered in VM; skipping CloseMenu call.");
+            SKSE::log::warn("CloseActiveModMenu: Skyrim UI queue unavailable; could not close Modex.");
         }
     } else if (active == ActiveMenu::HotkeyReminder) {
         // Hotkey Reminder's Papyrus CloseMenu() only closes CustomMenu; it does NOT emit the
@@ -3909,7 +3924,7 @@ static void PollOriginalHotkeyAliases(const BYTE* state) {
         if (active == ActiveMenu::Modex ||
             (active == ActiveMenu::None && !(g_LauncherWindow && g_LauncherWindow->IsOpen.load()) &&
              !IsExternalMenuOpen() && NowMs() >= g_MenuOpenLockUntilMs.load())) {
-            SKSE::log::info("DirectInput: Modex alias edge on {}; opening/toggling through Papyrus API.",
+            SKSE::log::info("DirectInput: Modex alias edge on {}; opening/toggling through native API.",
                 NameFromDIK(g_AliasDik[AI_Modex].load()));
             OpenModex();
         }
@@ -7654,6 +7669,11 @@ static void __stdcall RenderLauncher() {
     const bool hasModex = g_ModexConfig.enabled || IsModexInstalled();
     if (hasModex && !g_ModexConfig.enabled) {
         LoadModexConfig();
+        if (g_ModexConfig.enabled) {
+            // Modex may register its message API after our initial kPostLoad pass. As soon as the
+            // interface becomes available, finish native-hotkey management and reload its settings.
+            TryManageModexHotkey();
+        }
     }
     const bool hasHotkeyReminder = IsHotkeyReminderInstalled();
 
@@ -9528,6 +9548,10 @@ static void TryManageOPSHotkey(bool lateRetry) {
 
 static void TryManageModexHotkey() {
     if (g_ExcludeMod[AI_Modex].load() || !IsModexInstalled()) return;
+    if (!ModexAPI::GetModexInterface001()) {
+        SKSE::log::warn("TryManageModexHotkey: Modex native API unavailable; leaving its native hotkey unchanged.");
+        return;
+    }
 
     const std::filesystem::path jsonPath = "Data/Interface/Modex/user/settings.json";
     if (!std::filesystem::exists(jsonPath)) return;
@@ -9546,8 +9570,10 @@ static void TryManageModexHotkey() {
             SKSE::log::info("TryManageModexHotkey: captured Modex original key {}.", g_ModexOriginalKey.load());
         }
 
-        const int orig = g_ModexOriginalKey.load() > 0 ? g_ModexOriginalKey.load() : origDefault;
-        const int want = g_UnblockModex.load() ? orig : 0; // 0 = disabled
+        // Keep Modex's own listener disabled for the entire time it is managed. The user's enabled
+        // Modex row is handled by our alias bridge, so restoring the native key here would make one
+        // physical press reach both integrations and could toggle the menu twice.
+        const int want = 0;
 
         if (current != want) {
             data["Open Menu Keybind"] = want;
@@ -9557,6 +9583,12 @@ static void TryManageModexHotkey() {
                 outfile.close();
                 SKSE::log::info("TryManageModexHotkey: updated Modex Keybind {} -> {} (unblock={}).", current, want, g_UnblockModex.load());
             }
+        }
+        // Modex reads settings before its message API is available on some load orders. Apply the
+        // on-disk change to its live InputManager immediately instead of requiring another restart.
+        if (auto* api = ModexAPI::GetModexInterface001()) {
+            api->UpdateSettings();
+            SKSE::log::info("TryManageModexHotkey: reloaded Modex settings through its native API.");
         }
         g_ModexConfig.toggleDIK = want > 0 ? want : 0xD3;
         g_ModexConfig.toggleVK = VKFromDIK(g_ModexConfig.toggleDIK);
@@ -9580,15 +9612,14 @@ static void OpenModex() {
 
     CloseLauncher();
     g_LastLauncherToggleMs.store(NowMs());
-    auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
-    if (!vm || !vm->TypeIsValid("Modex")) {
-        SKSE::log::warn("OpenModex: Modex type is not registered in the Papyrus VM.");
+    auto* api = ModexAPI::GetModexInterface001();
+    if (!api) {
+        SKSE::log::warn("OpenModex: Modex native API is unavailable.");
         return;
     }
-    RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> cb;
-    vm->DispatchStaticCall("Modex", "OpenMenu", RE::MakeFunctionArguments(), cb);
+    api->OpenMenu();
     g_ActiveMenu.store(ActiveMenu::Modex);
-    SKSE::log::info("OpenModex: dispatched Modex.OpenMenu().");
+    SKSE::log::info("OpenModex: opened Modex through its native API.");
 }
 
 static bool SetHotkeyReminderHotkeyEnabled(bool enabled) {
@@ -10444,7 +10475,7 @@ static std::string GetExclusionDetailString(int aliasIdx) {
             return "Path: Interface\\Modex\\user\\settings.json\n"
                    "Default key: Delete\n"
                    "Default value: \"Open Menu Keybind\" = 211\n"
-                   "Changed to: \"Open Menu Keybind\" = 0 (disabled). Opened dynamically via static call Modex.OpenMenu().\n";
+                   "Changed to: \"Open Menu Keybind\" = 0 (disabled). Opened through Modex's native API.\n";
         case AI_HotkeyReminder:
             return "Path: MCM\\Config\\HotkeyReminder\\settings.ini (read only; Risa does not edit it)\n"
                    "Default key: F11\n"
@@ -11103,8 +11134,10 @@ static void MessageHandler(SKSE::MessagingInterface::Message* msg) {
 
     case SKSE::MessagingInterface::kInputLoaded: {
         LoadOPSConfig();
+        LoadModexConfig();
         TryManageFLICKHotkey(true);
         TryManageOPSHotkey(true);
+        TryManageModexHotkey();
         auto* mgr = RE::BSInputDeviceManager::GetSingleton();
         if (mgr) {
             mgr->AddEventSink(RisaInputSink::GetSingleton());
@@ -11128,6 +11161,10 @@ static void MessageHandler(SKSE::MessagingInterface::Message* msg) {
         g_OPSKeyManaged.store(false);
         g_OPSFirstApply.store(true);
         TryManageOPSHotkey(false); // force immediate evaluation
+        // Modex registers its message interface later than kPostLoad in some load orders. Retry
+        // here so its native key is disabled even if the launcher has never been opened.
+        LoadModexConfig();
+        TryManageModexHotkey();
         // Hotkey Reminder's OnGameReload/Init path registers its configured key again.
         // Reassert keyless control for every loaded save and every new game; the normal
         // five-second monitor also covers ordering races and later MCM changes.
@@ -11144,7 +11181,7 @@ static void MessageHandler(SKSE::MessagingInterface::Message* msg) {
 // Plugin entry point
 // ============================================================================
 SKSEPluginInfo(
-    .Version              = REL::Version{ 1, 5, 6, 0 },
+    .Version              = REL::Version{ 1, 5, 7, 0 },
     .Name                 = "RisaAllInOneMenu",
     .Author               = "Risa",
     .SupportEmail         = "",
