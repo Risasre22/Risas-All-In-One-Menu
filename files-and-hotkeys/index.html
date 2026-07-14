@@ -478,6 +478,34 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="My menu’s support files">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#settings-and-backups" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Settings and backups
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#logs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Logs
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
     </ul>
@@ -546,6 +574,34 @@
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="My menu’s support files">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#settings-and-backups" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Settings and backups
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#logs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Logs
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -654,7 +710,7 @@
 <span class="gold">Path:</span> Interface\Modex\user\settings.json<br>
 <span class="gold">Default key:</span> Delete<br>
 <span class="gold">Default value:</span> "Open Menu Keybind" = 211<br>
-<span class="gold">Changed to:</span> "Open Menu Keybind" = 0 (disabled). My menu opens Modex through Modex.OpenMenu().</p>
+<span class="gold">Changed to:</span> "Open Menu Keybind" = 0 (disabled). My menu refreshes the setting through Modex's official native API and opens Modex directly. Closing uses a UI-message workaround because Modex 3.0's CloseMenu API currently reopens the menu.</p>
 
 <p><strong class="blue">Dragonborn’s Toolkit legacy fallback</strong> <span class="muted">(v0.5+ uses its live API and does not need this edit)</span><br>
 <span class="gold">Path:</span> SKSE\Plugins\SkyrimCheatMenu.json<br>
@@ -683,11 +739,53 @@
 <li><strong>Quick Armor Rebalance:</strong> no native default hotkey to edit.</li>
 </ul>
 <h2 id="my-menus-support-files">My menu’s support files<a class="headerlink" href="#my-menus-support-files" title="Permanent link">&para;</a></h2>
-<ul>
-<li>SKSE\Plugins\RisaAllInOneMenu.ini stores my menu’s settings and original-hotkey options.</li>
-<li>SKSE\Plugins\RisaAllInOneMenu_OriginalHotkeys.json stores captured values used by Restore for Uninstall and is removed after a successful complete restore.</li>
-<li>Documents\My Games\Skyrim Special Edition\SKSE\RisaAllInOneMenu_FileChanges.log records hotkey file edits and restores when file-change logging is enabled.</li>
-</ul>
+<p>These files belong to my menu. They are not files from another supported mod.</p>
+<h3 id="settings-and-backups">Settings and backups<a class="headerlink" href="#settings-and-backups" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>SKSE\Plugins\RisaAllInOneMenu.ini</code></td>
+<td>Stores my menu settings and original-hotkey options.</td>
+</tr>
+<tr>
+<td><code>SKSE\Plugins\RisaAllInOneMenu_OriginalHotkeys.json</code></td>
+<td>Stores captured settings used by <strong>Restore User Original Settings</strong>.</td>
+</tr>
+<tr>
+<td><code>SKSE\Plugins\RisaAllInOneMenu_OriginalHotkeys_Completed.json</code></td>
+<td>Archives a completed original-settings backup after a successful uninstall restore instead of deleting it.</td>
+</tr>
+<tr>
+<td><code>SKSE\Plugins\RisaAllInOneMenu\Translations\</code></td>
+<td>Contains the language JSON files shown in the language dropdown.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="logs">Logs<a class="headerlink" href="#logs" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Documents\My Games\Skyrim Special Edition\SKSE\RisaAllInOneMenu.log</code></td>
+<td>Main troubleshooting log. Enable <strong>Troubleshooting Log</strong> in Settings before reproducing an issue.</td>
+</tr>
+<tr>
+<td><code>Documents\My Games\Skyrim Special Edition\SKSE\RisaAllInOneMenu_FileChanges.log</code></td>
+<td>Records each supported-mod configuration edit and restore when <strong>Log File Changes</strong> is enabled.</td>
+</tr>
+</tbody>
+</table>
 
 
 
