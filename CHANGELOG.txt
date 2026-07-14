@@ -1,7 +1,5 @@
 RISA'S ALL IN ONE MENU - CHANGELOG
 ===================================
-Newest first. "In progress" = built/deployed locally but not yet released.
-Claude keeps this file up to date automatically as changes are made.
 
 1.5.7
 -----
