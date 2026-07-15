@@ -2417,7 +2417,9 @@ static std::atomic<bool> g_DragonbornIniManaged{ false };
 static std::atomic<long long> g_LastDragonbornIniAttemptMs{ 0 };
 
 static bool IsSearchUIAvailable();
+static void OpenSearchUI();
 extern std::atomic<int> g_SearchUIEffectiveDIK;
+static std::atomic<bool> g_SearchUIRememberSettingsAddon{ false };
 
 static constexpr WORD kEscapeDIK   = 0x01;  // ESC scan code
 static constexpr WORD kTabDIK      = 0x0F;  // TAB scan code
@@ -3951,6 +3953,27 @@ static void PollOriginalHotkeyAliases(const BYTE* state) {
                physicalShift == g_AliasShift[i].load() &&
                physicalAlt == g_AliasAlt[i].load();
     };
+
+    // Keep both SearchUI variants' native listeners parked on F18 and bridge Risa's enabled alias
+    // explicitly. This gives open and close separate, deterministic actions: otherwise pressing the
+    // native alias while UITextEntryMenu is open closes the text field and the same event immediately
+    // reaches SearchUI's listener again, reopening it.
+    if (IsSearchUIAvailable() && !g_ExcludeMod[AI_SearchUI].load() &&
+        CheckAliasTrigger(AI_SearchUI,
+            g_UnblockSearchUI.load() && !AliasEqualsLauncher(AI_SearchUI) && aliasDown(AI_SearchUI))) {
+        const auto active = g_ActiveMenu.load();
+        if (active == ActiveMenu::SearchUI) {
+            SKSE::log::info("DirectInput: SearchUI alias edge on {}; closing active search.",
+                NameFromDIK(g_AliasDik[AI_SearchUI].load()));
+            CloseActiveModMenu(active);
+        } else if (active == ActiveMenu::None &&
+            !(g_LauncherWindow && g_LauncherWindow->IsOpen.load()) &&
+            !IsExternalMenuOpen() && NowMs() >= g_MenuOpenLockUntilMs.load()) {
+            SKSE::log::info("DirectInput: SearchUI alias edge on {}; opening through managed F18 listener.",
+                NameFromDIK(g_AliasDik[AI_SearchUI].load()));
+            OpenSearchUI();
+        }
+    }
 
     // OPS's Papyrus key is placed under external control when Risa is present. Bridge the
     // user's OPS alias here so Numpad 1 remains free while the alias can still be enabled.
@@ -6390,6 +6413,7 @@ static void SyncSearchUIKey() {
                     if (config.contains("searchHotkey") && config["searchHotkey"].is_number_integer()) {
                         cur = config["searchHotkey"].get<int>();
                         rememberSettingsAddon = true;
+                        g_SearchUIRememberSettingsAddon.store(true);
                         break;
                     }
                 } catch (const std::exception& e) {
@@ -6429,17 +6453,16 @@ static void SyncSearchUIKey() {
         }
         g_SearchUIExclReleased.store(false); // re-included: resume managing
 
-        // Toggle ON: SearchUI's key = the user's chosen alias key (so that key opens it). Toggle OFF:
-        // park it on the unpressable F18 so the chosen key is free; the launcher button still opens it.
-        const int aliasKey = g_AliasDik[AI_SearchUI].load();
-        const int want = (g_UnblockSearchUI.load() && aliasKey != 0) ? aliasKey : kSearchUIFreeKey;
+        // While managed, SearchUI's own listener always stays on F18. Risa's enabled alias is bridged
+        // above, which prevents the same physical key from closing and immediately reopening the menu.
+        const int want = kSearchUIFreeKey;
         g_SearchUIEffectiveDIK.store(want);
         if (cur != want) {
             auto* args = RE::MakeFunctionArguments(std::int32_t(want));
             RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> cb;
             vm->DispatchMethodCall(obj, setter, args, cb);
-            SKSE::log::info("SyncSearchUIKey: {}({}) [{}], was {}.", setter, want,
-                (g_UnblockSearchUI.load() && aliasKey != 0) ? "user key on" : "freed (parked on F18)", cur);
+            SKSE::log::info("SyncSearchUIKey: {}({}) [managed alias bridge; native parked on F18], was {}.",
+                setter, want, cur);
         }
         clear();
     });

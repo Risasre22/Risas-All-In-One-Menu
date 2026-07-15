@@ -9,6 +9,7 @@ NEW:
 FIXED:
 - Changed Debug Menu's managed internal hotkey to F17 and fixed partial MCM settings overrides preventing the change.
 - Fixed lowercase P not being entered in text input fields.
+- Fixed custom SearchUI hotkeys not opening SearchUI - Remember Settings and regular SearchUI reopening immediately after closing.
 
 
 1.5.8
