@@ -103,7 +103,7 @@ static void DMenuApiMessageHandler(SKSE::MessagingInterface::Message* msg) {
     SKSE::log::info("dMenu API received via SKSE message (interface v{}).", iface->interfaceVersion);
 }
 
-static constexpr std::string_view kRisaMenuVersion = "1.5.8";
+static constexpr std::string_view kRisaMenuVersion = "2.0.0";
 static std::string g_RuntimeVersion = "Unknown";
 static std::string g_SKSEVersion = "Unknown";
 static std::string g_RuntimeEdition = "Unknown";
@@ -3148,7 +3148,9 @@ static LRESULT CALLBACK HookedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
 
     if (!IsUserTyping()) {
         // 1. Block SKSE Menu Framework's hotkey completely
-        if (g_MFConfig.toggleVK != 0 && g_MFConfig.toggleMode != "OFF" && wParam == static_cast<WPARAM>(g_MFConfig.toggleVK)) {
+        if ((uMsg == WM_KEYDOWN || uMsg == WM_KEYUP || uMsg == WM_SYSKEYDOWN || uMsg == WM_SYSKEYUP) &&
+            g_MFConfig.toggleVK != 0 && g_MFConfig.toggleMode != "OFF" &&
+            wParam == static_cast<WPARAM>(g_MFConfig.toggleVK)) {
             if ((g_AllowDebugMenuOpen.load() && NowMs() <= g_AllowDebugMenuOpenUntilMs.load()) ||
                 (g_AllowDragonbornOpen.load() && NowMs() <= g_AllowDragonbornOpenUntilMs.load())) {
                 return ::CallWindowProc(g_OrigWndProc.load(), hWnd, uMsg, wParam, lParam);
@@ -5057,7 +5059,7 @@ static RE::BSEventNotifyControl GenericSinkHook(RE::BSTEventSink<RE::InputEvent*
                     // so we can see whether the engine sink is even reached while the menu is OPEN.
                     SKSE::log::info("GenericSinkHook[DebugMenu]: toggle key hit sink (menuOpen={}, simWindow={}) -> {}",
                         g_ActiveMenu.load() == ActiveMenu::DebugMenu, dbgSimWindow, dbgSimWindow ? "pass" : "filter");
-                    // Our injected open-key is let through during the allow-window; a stray one is filtered.
+                    // Our simulated open-key is let through during the allow-window; a stray one is filtered.
                     if (dbgSimWindow) return e.orig(sink, a_event, src);
                     return FilterDispatch(sink, e.orig, a_event, src, g_DebugMenuConfig.toggleDIK);
                 }
@@ -6119,7 +6121,7 @@ static void OpenDebugMenu() {
 
     g_ActiveMenu.store(ActiveMenu::DebugMenu);
     g_MenuOpenLockUntilMs.store(NowMs() + 500);
-    InjectEngineKey(g_DebugMenuConfig.toggleDIK); // feeds a real F17 ButtonEvent to Debug Menu's sink
+    InjectEngineKey(g_DebugMenuConfig.toggleDIK); // proven v1.5.5 path: feeds F17 to Debug Menu's sink
     SKSE::log::info("OpenDebugMenu: opening Debug Menu via engine injection.");
 }
 
@@ -6370,11 +6372,37 @@ static void SyncSearchUIKey() {
         }
 
         const auto* var = obj->GetProperty("SearchHotkey");
-        const int cur = var ? var->GetSInt() : -1;
+        bool rememberSettingsAddon = false;
+        int cur = var ? var->GetSInt() : -1;
+        if (!var) {
+            // SearchUI - Remember Settings replaces the original SearchHotkey property/SetHotkey
+            // pair with GetSearchHotKey()/SetSearchHotKey(int), backed by this JSON. Read its
+            // authoritative persisted value, then make all changes through its public setter below
+            // so registration, StorageUtil, and the remembered JSON remain synchronized.
+            for (const std::filesystem::path path : {
+                    std::filesystem::path("Data/SKSE/Plugins/SearchUI/config.json"),
+                    std::filesystem::path("SKSE/Plugins/SearchUI/config.json") }) {
+                if (!std::filesystem::exists(path)) continue;
+                try {
+                    std::ifstream input(path);
+                    nlohmann::json config;
+                    input >> config;
+                    if (config.contains("searchHotkey") && config["searchHotkey"].is_number_integer()) {
+                        cur = config["searchHotkey"].get<int>();
+                        rememberSettingsAddon = true;
+                        break;
+                    }
+                } catch (const std::exception& e) {
+                    SKSE::log::warn("SyncSearchUIKey: failed to read Remember Settings config: {}.", e.what());
+                }
+            }
+        }
+        const char* setter = rememberSettingsAddon ? "SetSearchHotKey" : "SetHotkey";
         {
             static std::atomic<bool> logged{ false };
             if (!logged.exchange(true))
-                SKSE::log::info("SyncSearchUIKey: found SearchUIController; SearchHotkey={}.", cur);
+                SKSE::log::info("SyncSearchUIKey: found SearchUIController; hotkey={} (path={}).", cur,
+                    rememberSettingsAddon ? "Remember Settings API" : "standard property API");
         }
         if (cur < 0) { clear(); return; }
 
@@ -6393,7 +6421,7 @@ static void SyncSearchUIKey() {
                 if (cur != orig) {
                     auto* args = RE::MakeFunctionArguments(std::int32_t(orig));
                     RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> cb;
-                    vm->DispatchMethodCall(obj, "SetHotkey", args, cb);
+                    vm->DispatchMethodCall(obj, setter, args, cb);
                     SKSE::log::info("SyncSearchUIKey: excluded - released key back to {} (was {}).", orig, cur);
                 }
             }
@@ -6409,8 +6437,8 @@ static void SyncSearchUIKey() {
         if (cur != want) {
             auto* args = RE::MakeFunctionArguments(std::int32_t(want));
             RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> cb;
-            vm->DispatchMethodCall(obj, "SetHotkey", args, cb);
-            SKSE::log::info("SyncSearchUIKey: SetHotkey({}) [{}], was {}.", want,
+            vm->DispatchMethodCall(obj, setter, args, cb);
+            SKSE::log::info("SyncSearchUIKey: {}({}) [{}], was {}.", setter, want,
                 (g_UnblockSearchUI.load() && aliasKey != 0) ? "user key on" : "freed (parked on F18)", cur);
         }
         clear();
@@ -9191,7 +9219,27 @@ static void ManageDebugMenuKey() {
             lines.push_back(line);
         }
     }
-    if (!replaced) { SKSE::log::warn("ManageDebugMenuKey: uOpenMenuHotkey line not found."); return; }
+    if (!replaced) {
+        // MCM Helper user overrides may be intentionally partial. If the higher-priority user file
+        // exists but omits this key, add it under [Main] instead of abandoning management and leaving
+        // Debug Menu on the launcher's shared F1.
+        auto mainIt = std::find_if(lines.begin(), lines.end(), [](const std::string& line) {
+            return ToUpper(TrimStr(line)) == "[MAIN]";
+        });
+        if (mainIt != lines.end()) {
+            auto insertAt = std::find_if(std::next(mainIt), lines.end(), [](const std::string& line) {
+                const std::string trimmed = TrimStr(line);
+                return trimmed.size() >= 2 && trimmed.front() == '[' && trimmed.back() == ']';
+            });
+            lines.insert(insertAt, std::format("uOpenMenuHotkey = {}", static_cast<int>(freeKey)));
+        } else {
+            if (!lines.empty() && !lines.back().empty()) lines.emplace_back();
+            lines.emplace_back("[Main]");
+            lines.emplace_back(std::format("uOpenMenuHotkey = {}", static_cast<int>(freeKey)));
+        }
+        replaced = true;
+        SKSE::log::info("ManageDebugMenuKey: added missing uOpenMenuHotkey to partial user settings override.");
+    }
 
     std::ofstream out(settingsIni, std::ios::trunc);
     if (!out.is_open()) { SKSE::log::error("ManageDebugMenuKey: failed to open {} for writing.", settingsIni.string()); return; }

@@ -8,7 +8,7 @@ endif()
 
 set(VCPKG_TARGET_TRIPLET "x64-windows-static-md" CACHE STRING "vcpkg target triplet")
 
-project(RisaAllInOneMenu VERSION 1.5.8 LANGUAGES CXX)
+project(RisaAllInOneMenu VERSION 2.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

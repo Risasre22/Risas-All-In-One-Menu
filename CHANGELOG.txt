@@ -1,6 +1,16 @@
 RISA'S ALL IN ONE MENU - CHANGELOG
 ===================================
 
+2.0.0
+-----
+NEW:
+- Added compatibility with SearchUI - Remember Settings.
+
+FIXED:
+- Changed Debug Menu's managed internal hotkey to F17 and fixed partial MCM settings overrides preventing the change.
+- Fixed lowercase P not being entered in text input fields.
+
+
 1.5.8
 -----
 NEW:
