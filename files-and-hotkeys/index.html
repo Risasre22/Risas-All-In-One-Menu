@@ -633,7 +633,6 @@
 <summary>Keys Freed for You — 26 bindings using 19 distinct hotkeys</summary>
 <p>If every supported integration is installed, my menu manages <strong>26 default hotkey bindings across 20 mods</strong>. These bindings use <strong>19 distinct hotkeys</strong>, because several mods share F1, Home, F6, or End. MCM and Quick Armor Rebalance are also supported, but neither has a native default hotkey.</p>
 <ul>
-<li><strong>Mod Configuration Menu (MCM):</strong> None</li>
 <li><strong>SKSE Menu Framework:</strong> F1</li>
 <li><strong>dMenu NG:</strong> Home</li>
 <li><strong>FLICK:</strong> F7</li>
@@ -646,7 +645,6 @@
 <li><strong>Hotkey Reminder:</strong> F11</li>
 <li><strong>Open Animation Replacer:</strong> Shift + O</li>
 <li><strong>Immersive Equipment Displays:</strong> Backspace</li>
-<li><strong>Quick Armor Rebalance:</strong> None</li>
 <li><strong>Outfit Preview Selector:</strong> Numpad 1</li>
 <li><strong>Skyrim Vanity System:</strong> F6</li>
 <li><strong>Skyrim Party Sheet:</strong> X (Settings), F6 (Party Sheet), Y (Inspect Card), U (Character Sheet) — 4 bindings</li>
@@ -695,18 +693,6 @@
 <span class="gold">Default values under “Menu”:</span> "ToggleKey": 35 | "CSEditorToggleKey": [16, 35] | "OverlayToggleKey": 121 | "EffectToggleKey": 106<br>
 <span class="gold">Changed to:</span> ToggleKey = F19 | CSEditorToggleKey = F15 with no modifier | OverlayToggleKey = F23 | EffectToggleKey = F24.</p>
 
-<p><strong class="blue">CatMenu</strong><br>
-<span class="gold">Path:</span> SKSE\Plugins\catmenu\settings.json<br>
-<span class="gold">Default key:</span> F6<br>
-<span class="gold">Default value:</span> "toggle_key": 577<br>
-<span class="gold">Changed to:</span> "toggle_key": 592 (F21 parking key). My menu intercepts the listener and opens CatMenu directly.</p>
-
-<p><strong class="blue">Mod Function Menu</strong><br>
-<span class="gold">Path:</span> SKSE\Plugins\ccld_ModFunctionMenu.toml<br>
-<span class="gold">Default key:</span> F1<br>
-<span class="gold">Default value:</span> [Controls.Keyboard] iHotkey = 59<br>
-<span class="gold">Changed to:</span> iHotkey = 107 (F20 unpressable parking key). Restart once so the mod reads the value.</p>
-
 <p><strong class="blue">Skyrim Vanity System</strong><br>
 <span class="gold">Path:</span> SKSE\Plugins\SkyrimVanitySystem\settings.json<br>
 <span class="gold">Default key:</span> F6<br>
@@ -735,6 +721,7 @@
 <ul>
 <li><strong>SKSE Menu Framework:</strong> native F1 listener disabled/restored through its API.</li>
 <li><strong>dMenu NG:</strong> Home disabled/restored through the v2 API. Stock dMenu without that API is left unmanaged.</li>
+<li><strong>Photo Mode:</strong> opened and closed through <code>po3_photomode.TogglePhotoMode(true/false)</code>. Its primary open key is disabled by default; no settings file is edited.</li>
 <li><strong>FLICK:</strong> F7 disabled/restored through its hotkey API.</li>
 <li><strong>SearchUI:</strong> F4 parked live on F18 through Papyrus.</li>
 <li><strong>Outfit Preview Selector:</strong> Numpad 1 parked live on F18 through its Papyrus hotkey property; opening uses its Papyrus method and closing uses the <code>OPS_CloseMenu</code> mod event; no INI is edited.</li>

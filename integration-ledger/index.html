@@ -534,240 +534,213 @@
 <h2 id="legend">Legend<a class="headerlink" href="#legend" title="Permanent link">&para;</a></h2>
 <ul>
 <li><span class="perfect">Gold letters</span> = perfect integration</li>
-<li><span class="blue">✅</span> = update-resilient integration</li>
-<li><span class="gold">⚠️</span> = compatibility update may be needed</li>
-<li><span class="blue">▶️</span> = direct open/close through a non-key method</li>
-<li>⌨️ = key freed live with no file edit</li>
-<li>💾 = key freed through INI/JSON/config editing</li>
-<li><span class="gold">✏️</span> = API request pending or historically requested from the original mod author</li>
+<li><span class="blue">&#x2705;</span> = update-resilient integration</li>
+<li><span class="gold">&#x26A0;&#xFE0F;</span> = compatibility update may be needed</li>
+<li><span class="blue">&#x25B6;&#xFE0F;</span> = direct open/close through a non-key method</li>
+<li>&#x2328;&#xFE0F; = key freed live with no file edit</li>
+<li>&#x1F4BE; = key freed through INI/JSON/config editing</li>
+<li><span class="gold">&#x270F;&#xFE0F;</span> = API request pending or historically requested from the original mod author</li>
 </ul>
 <div class="integration-table">
 <table>
 <tbody>
 <tr>
-<td><span class="blue">✅</span></td>
-<td><span class="blue">▶️</span></td>
-<td>⌨️</td>
-<td>✏️</td>
+<td><span class="blue">&#x2705;</span></td>
+<td><span class="blue">&#x25B6;&#xFE0F;</span></td>
+<td>&#x2328;&#xFE0F;</td>
+<td></td>
 <td></td>
 <td><strong class="perfect">SKSE Menu Framework</strong></td>
-<td>Added hotkey API Thanks to <a href="https://www.nexusmods.com/skyrimspecialedition/users/12458883">SkyrimThiago</a>!~</td>
+<td>Native hotkey listener managed through its API.</td>
 </tr>
 <tr>
-<td><span class="blue">✅</span></td>
-<td><span class="blue">▶️</span></td>
-<td>⌨️</td>
+<td><span class="blue">&#x2705;</span></td>
+<td><span class="blue">&#x25B6;&#xFE0F;</span></td>
+<td>&#x2328;&#xFE0F;</td>
 <td></td>
 <td></td>
-<td><strong class="perfect">Mod Configuration Menu (MCM)</strong></td>
-<td><span class="muted">opens directly to SkyUI's config panel</span></td>
+<td><strong class="perfect">Mod Configuration Menu</strong></td>
+<td><span class="muted">Opens directly to SkyUI's configuration panel.</span></td>
 </tr>
 <tr>
-<td><span class="blue">✅</span></td>
+<td><span class="blue">&#x2705;</span></td>
 <td></td>
-<td>⌨️</td>
-<td>✏️</td>
+<td>&#x2328;&#xFE0F;</td>
+<td></td>
 <td><strong class="blue">F18</strong></td>
 <td>SearchUI</td>
-<td><span class="muted">hotkey managed/parked on F18 live via Papyrus VM; no INI edit</span></td>
+<td><span class="muted">Hotkey managed live through Papyrus; no INI edit.</span></td>
 </tr>
 <tr>
-<td><span class="gold">⚠️</span></td>
-<td><span class="blue">▶️</span></td>
-<td>💾</td>
-<td><span class="gold">✏️</span></td>
+<td><span class="gold">&#x26A0;&#xFE0F;</span></td>
+<td><span class="blue">&#x25B6;&#xFE0F;</span></td>
+<td>&#x1F4BE;</td>
+<td><span class="gold">&#x270F;&#xFE0F;</span></td>
 <td><strong class="blue">F13</strong></td>
 <td>Open Animation Replacer</td>
-<td><span class="muted">direct open is version-dependent</span></td>
+<td><span class="muted">Direct open is version-dependent.</span></td>
 </tr>
 <tr>
-<td><span class="gold">⚠️</span></td>
-<td><span class="blue">▶️</span></td>
-<td>💾</td>
-<td><span class="gold">✏️</span></td>
+<td><span class="gold">&#x26A0;&#xFE0F;</span></td>
+<td><span class="blue">&#x25B6;&#xFE0F;</span></td>
+<td>&#x1F4BE;</td>
+<td><span class="gold">&#x270F;&#xFE0F;</span></td>
 <td><strong class="blue">F16</strong></td>
-<td>Immersive Equipment Displays 1.7.5b</td>
-<td><span class="muted">author unreachable; direct open version-dependent</span></td>
+<td>Immersive Equipment Displays</td>
+<td><span class="muted">Direct open is version-dependent.</span></td>
 </tr>
 <tr>
-<td><span class="gold">⚠️</span></td>
-<td>▶️</td>
-<td>⌨️</td>
-<td><span class="gold">✏️</span></td>
+<td><span class="gold">&#x26A0;&#xFE0F;</span></td>
+<td>&#x25B6;&#xFE0F;</td>
+<td>&#x2328;&#xFE0F;</td>
+<td><span class="gold">&#x270F;&#xFE0F;</span></td>
 <td><strong class="blue">F4</strong></td>
 <td>Debug Menu</td>
-<td><span class="muted">Use F4 but key is freed no .ini edits</span> <span class="author-note">Author: "I could try and implement something like that"</span></td>
+<td><span class="muted">Intercepted live; its INI is changed only when a launcher-key collision requires it.</span></td>
 </tr>
 <tr>
-<td><span class="gold">⚠️</span></td>
+<td><span class="blue">&#x2705;</span></td>
+<td><span class="blue">&#x25B6;&#xFE0F;</span></td>
+<td><span class="blue">&#x2328;&#xFE0F;</span></td>
 <td></td>
 <td></td>
-<td></td>
-<td></td>
-<td><span class="muted">dMenu</span></td>
-<td><span class="muted">Not Supported use included edit</span> <span class="gold"><strong>⬇</strong></span></td>
+<td><strong class="perfect">dMenu NG (optional API build)</strong></td>
+<td>Uses the v2 API to open, close, and disable or restore Home live. No INI edit.</td>
 </tr>
 <tr>
-<td><span class="blue">⚠️</span></td>
+<td><span class="blue">&#x2705;</span></td>
+<td></td>
+<td><span class="blue">&#x2328;&#xFE0F;</span></td>
 <td></td>
 <td></td>
-<td>✏️</td>
-<td></td>
-<td><span class="muted">dMenu NG</span></td>
-<td><span class="muted">Not Supported use included edit</span> <span class="gold"><strong>⬇</strong></span></td>
+<td>Improved Camera SE</td>
+<td><span class="muted">Key freed at the input level; no INI edit.</span></td>
 </tr>
 <tr>
-<td><span class="blue">✅</span></td>
-<td><span class="blue">▶️</span></td>
-<td><span class="blue">⌨️</span></td>
+<td><span class="blue">&#x2705;</span></td>
+<td><span class="blue">&#x25B6;&#xFE0F;</span></td>
+<td>&#x2328;&#xFE0F;</td>
 <td></td>
-<td></td>
-<td><strong class="perfect">dMenu NG (my edit)</strong></td>
-<td>Supported Thanks to <a href="https://www.nexusmods.com/skyrimspecialedition/users/67161596">C0kAdam</a>!~</td>
-</tr>
-<tr>
-<td><span class="blue">✅</span></td>
-<td></td>
-<td><span class="blue">⌨️</span></td>
-<td></td>
-<td></td>
-<td>Improved Camera SE 1.1.2.4228</td>
-<td><span class="muted">key freed at the input level; no INI edit, no API</span></td>
-</tr>
-<tr>
-<td><span class="blue">✅</span></td>
-<td><span class="blue">▶️</span></td>
-<td><span class="blue">⌨️</span></td>
-<td></td>
-<td></td>
-<td><strong class="perfect">Improved Camera NG 2.0.0.1215</strong></td>
-<td><span class="muted">No menu API but has "ic menu" command</span></td>
-</tr>
-<tr>
-<td><span class="blue">✅</span></td>
-<td></td>
-<td><span class="blue">⌨️</span></td>
-<td></td>
-<td></td>
-<td><strong class="perfect">ENB Editor</strong></td>
-<td><span class="muted">freed at the input level; no INI edit, no API</span></td>
-</tr>
-<tr>
-<td><span class="blue">✅</span></td>
-<td><span class="blue">▶️</span></td>
-<td>⌨️</td>
-<td>✏️</td>
 <td></td>
 <td><strong class="perfect">FLICK</strong></td>
-<td>Thanks to <span class="blue">Fuzzlesz</span> for adding API~</td>
+<td>Native listener managed through its API.</td>
 </tr>
 <tr>
-<td><span class="gold">⚠️</span></td>
+<td><span class="gold">&#x26A0;&#xFE0F;</span></td>
 <td></td>
-<td>💾</td>
-<td><span class="gold">✏️</span></td>
+<td>&#x1F4BE;</td>
+<td><span class="gold">&#x270F;&#xFE0F;</span></td>
 <td><strong class="blue">F18</strong></td>
 <td>KreatE</td>
-<td><span class="muted">Not even read, not very active creator</span></td>
+<td><span class="muted">Uses its settings file.</span></td>
 </tr>
 <tr>
-<td><span class="gold">⚠️</span></td>
+<td><span class="gold">&#x26A0;&#xFE0F;</span></td>
 <td></td>
-<td>💾</td>
-<td><span class="gold">✏️</span></td>
-<td><strong class="blue">×4</strong></td>
+<td>&#x1F4BE;</td>
+<td><span class="gold">&#x270F;&#xFE0F;</span></td>
+<td><strong class="blue">x4</strong></td>
 <td>Community Shaders</td>
-<td><strong class="blue">F15/F19/f23/f24</strong><span class="muted"> i sent a message 😅 unlikely though</span></td>
+<td><strong class="blue">F15 / F19 / F23 / F24</strong></td>
 </tr>
 <tr>
-<td><span class="blue">✅</span></td>
-<td><span class="blue">▶️</span></td>
-<td>⌨️</td>
-<td><span class="gold">✏️</span></td>
-<td></td>
-<td><strong class="perfect">Dragonborn’s Toolkit</strong></td>
-<td>Added hotkey API as well Huge thanks to <a href="https://www.nexusmods.com/skyrimspecialedition/users/260641375">Modslab</a>!~</td>
-</tr>
-<tr>
-<td><span class="gold">⚠️</span></td>
-<td><span class="blue">▶️</span></td>
-<td>💾</td>
-<td><span class="gold">✏️</span></td>
-<td><strong class="blue">F21</strong></td>
-<td>CatMenu 2.0.1</td>
-<td><span class="muted">Unlikely to free this mod form F21/INI edits (No Response)</span></td>
-</tr>
-<tr>
-<td><span class="blue">⚠️</span></td>
-<td><span class="blue">▶️</span></td>
-<td>💾</td>
+<td><span class="blue">&#x2705;</span></td>
+<td><span class="blue">&#x25B6;&#xFE0F;</span></td>
+<td>&#x2328;&#xFE0F;</td>
 <td></td>
 <td></td>
-<td>ReShade 6.7.3+</td>
-<td><span class="muted">No key API my mod frees the key from "Home" to "disabled"</span></td>
+<td><strong class="perfect">Dragonborn's Toolkit</strong></td>
+<td>Native listener managed through the runtime API.</td>
 </tr>
 <tr>
-<td><span class="gold">⚠️</span></td>
-<td><span class="blue">▶️</span></td>
-<td>⌨️</td>
-<td><span class="gold">✏️</span></td>
+<td><span class="blue">&#x2705;</span></td>
+<td><span class="blue">&#x25B6;&#xFE0F;</span></td>
+<td><span class="blue">&#x2328;&#xFE0F;</span></td>
 <td></td>
-<td>Skyrim Party Sheet 2.9</td>
-<td><span class="muted">opens through its input sink with per-action modifier support; native keys are intercepted live and no INI is edited; compatibility may need updates until an API is available</span> <span class="author-note">Author: "I may add an API later."</span></td>
+<td></td>
+<td><strong class="perfect">CatMenu</strong></td>
+<td>Optional API build opens and closes directly and manages the native listener live. No JSON edit and no parked F-key.</td>
 </tr>
 <tr>
-<td><span class="blue">✅</span></td>
-<td><span class="blue">▶️</span></td>
-<td>⌨️</td>
-<td>✏️</td>
+<td><span class="blue">&#x26A0;&#xFE0F;</span></td>
+<td><span class="blue">&#x25B6;&#xFE0F;</span></td>
+<td>&#x1F4BE;</td>
+<td></td>
+<td></td>
+<td>ReShade</td>
+<td><span class="muted">The add-on API opens the overlay; Home is disabled in ReShade.ini.</span></td>
+</tr>
+<tr>
+<td><span class="gold">&#x26A0;&#xFE0F;</span></td>
+<td><span class="blue">&#x25B6;&#xFE0F;</span></td>
+<td>&#x2328;&#xFE0F;</td>
+<td><span class="gold">&#x270F;&#xFE0F;</span></td>
+<td></td>
+<td>Skyrim Party Sheet</td>
+<td><span class="muted">Native keys are intercepted live with no INI edit.</span></td>
+</tr>
+<tr>
+<td><span class="blue">&#x2705;</span></td>
+<td><span class="blue">&#x25B6;&#xFE0F;</span></td>
+<td>&#x2328;&#xFE0F;</td>
+<td></td>
 <td></td>
 <td>Quick Armor Rebalance</td>
-<td><span class="author-note">Author: "Sure, I'll add a Close() to Papyrus in a couple of days"</span></td>
+<td><span class="muted">Opens through Papyrus. It has no native default hotkey.</span></td>
 </tr>
 <tr>
-<td><span class="gold">⚠️</span></td>
-<td><span class="blue">▶️</span></td>
-<td>💾</td>
-<td><span class="gold">✏️</span></td>
+<td><span class="blue">&#x2705;</span></td>
+<td><span class="blue">&#x25B6;&#xFE0F;</span></td>
+<td>&#x2328;&#xFE0F;</td>
 <td></td>
-<td>Modex 3.0</td>
-<td><span class="muted">opens through its official API; Delete is disabled and restored on exclusion or uninstall; closing currently uses a compatibility workaround</span></td>
+<td></td>
+<td><strong class="perfect">Photo Mode</strong></td>
+<td>Opens and closes through Photo Mode's built-in Papyrus API. No settings file is edited.</td>
 </tr>
 <tr>
-<td><span class="blue">✅</span></td>
-<td><span class="blue">▶️</span></td>
-<td>⌨️</td>
-<td><span class="gold">✏️</span></td>
+<td><span class="gold">&#x26A0;&#xFE0F;</span></td>
+<td><span class="blue">&#x25B6;&#xFE0F;</span></td>
+<td>&#x1F4BE;</td>
+<td><span class="gold">&#x270F;&#xFE0F;</span></td>
 <td></td>
-<td><strong class="perfect">Hotkey Reminder 1.0.7+</strong></td>
-<td><span class="muted">public OpenMenu/ToggleHotkey API; listener disabled live with no settings edit and restored on exclusion or uninstall; my menu sends Tab to use Save &amp; Exit because CloseMenu does not close reliably</span></td>
+<td>Modex</td>
+<td><span class="muted">Opens through its official API; Delete is disabled in its settings file.</span></td>
 </tr>
 <tr>
-<td><span class="gold">⚠️</span></td>
+<td><span class="blue">&#x2705;</span></td>
+<td><span class="blue">&#x25B6;&#xFE0F;</span></td>
+<td>&#x2328;&#xFE0F;</td>
 <td></td>
-<td>💾</td>
-<td><span class="gold">✏️</span></td>
+<td></td>
+<td><strong class="perfect">Hotkey Reminder</strong></td>
+<td>Public API controls the listener with no settings edit.</td>
+</tr>
+<tr>
+<td><span class="gold">&#x26A0;&#xFE0F;</span></td>
+<td></td>
+<td>&#x1F4BE;</td>
+<td><span class="gold">&#x270F;&#xFE0F;</span></td>
 <td><strong class="blue">F22</strong></td>
 <td>Skyrim Vanity System</td>
-<td><span class="muted">F6 is parked on F22 through settings.json; my menu injects F22 to open or close and restores the captured key on exclusion or uninstall; native menu and hotkey APIs requested</span></td>
+<td><span class="muted">F6 is parked through settings.json.</span></td>
 </tr>
 <tr>
-<td><span class="gold">⚠️</span></td>
+<td><span class="blue">&#x2705;</span></td>
+<td><span class="blue">&#x25B6;&#xFE0F;</span></td>
+<td><span class="blue">&#x2328;&#xFE0F;</span></td>
 <td></td>
-<td>💾</td>
-<td><span class="gold">✏️</span></td>
-<td><strong class="blue">F20</strong></td>
-<td>Mod Function Menu</td>
-<td><span class="muted">reads engine input; key parked via TOML edit, opened by injecting the key; no API yet (message sent)</span></td>
+<td></td>
+<td><strong class="perfect">Mod Function Menu</strong></td>
+<td>Optional API build opens and closes directly and controls only its native opening listener. No TOML edit and no parked F-key.</td>
 </tr>
 <tr>
-<td><span class="blue">✅</span></td>
-<td><span class="blue">▶️</span></td>
-<td>⌨️</td>
+<td><span class="blue">&#x2705;</span></td>
+<td><span class="blue">&#x25B6;&#xFE0F;</span></td>
+<td>&#x2328;&#xFE0F;</td>
 <td></td>
 <td></td>
 <td><strong class="perfect">Outfit Preview Selector</strong></td>
-<td><span class="muted">opens through its Papyrus method and closes through the OPS_CloseMenu mod event, including on Escape; the native hotkey is parked live through its Papyrus property with no file edit and restored on exclusion or uninstall</span></td>
+<td>Uses Papyrus and a mod event; its native hotkey is managed live.</td>
 </tr>
 </tbody>
 </table>
